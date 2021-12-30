@@ -1,0 +1,11 @@
+{
+	application,
+	'shq',
+	[
+		{description, "Simple shared queue"},
+		{vsn, "0.0.1"},
+		{modules, ['shq']},
+		{applications, [kernel, stdlib]},
+		{licenses, []}
+	]
+}.
