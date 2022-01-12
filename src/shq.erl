@@ -69,11 +69,11 @@ stop(ServerRef, Reason, Timeout) ->
 
 -spec in(ServerRef :: server_ref(), Value :: term()) -> 'ok'.
 in(ServerRef, Value) ->
-	gen_server:cast(ServerRef, {in, Value}).
+	gen_server:call(ServerRef, {in, Value}, infinity).
 
 -spec in_r(ServerRef :: server_ref(), Value :: term()) -> 'ok'.
 in_r(ServerRef, Value) ->
-	gen_server:cast(ServerRef, {in_r, Value}).
+	gen_server:call(ServerRef, {in_r, Value}, infinity).
 
 -spec out(ServerRef :: server_ref()) -> {'ok', Value :: term()} | 'empty'.
 out(ServerRef) ->
@@ -158,6 +158,32 @@ init([]) ->
 	{ok, #state{tab=Tab}}.
 
 -spec handle_call(Msg :: term(), From :: term(), State0 :: #state{}) -> {'reply', Reply :: term(), State1 :: #state{}} | {'noreply', State1 :: #state{}}.
+handle_call({in, Value}, _From, State=#state{tab=Tab, front=Index, rear=Index, wait_queue=Waiting0}) ->
+	case dequeue_waiting(Waiting0) of
+		{undefined, Waiting1} ->
+			true=ets:insert(Tab, {Index, Value}),
+			{reply, ok, State#state{rear=Index+1, wait_queue=Waiting1}};
+		{Tag, ReplyTo, Waiting1} ->
+			ReplyTo ! {Tag, {ok, Value}},
+			{reply, ok, State#state{wait_queue=Waiting1}}
+	end;
+handle_call({in, Value}, _From, State=#state{tab=Tab, rear=Rear}) ->
+	ets:insert(Tab, {Rear, Value}),
+	{reply, ok, State#state{rear=Rear+1}};
+handle_call({in_r, Value}, _From, State=#state{tab=Tab, front=Index0, rear=Index0, wait_queue=Waiting0}) ->
+	case dequeue_waiting(Waiting0) of
+		{undefined, Waiting1} ->
+			Index1=Index0-1,
+			ets:insert(Tab, {Index1, Value}),
+			{reply, ok, State#state{front=Index1, wait_queue=Waiting1}};
+		{Tag, ReplyTo, Waiting1} ->
+			ReplyTo ! {Tag, {ok, Value}},
+			{reply, ok, State#state{wait_queue=Waiting1}}
+	end;
+handle_call({in_r, Value}, _From, State=#state{tab=Tab, front=Front0}) ->
+	Front1=Front0-1,
+	ets:insert(Tab, {Front1, Value}),
+	{reply, ok, State#state{front=Front1}};
 handle_call(out, _From, State=#state{front=Index, rear=Index}) ->
 	{reply, empty, State};
 handle_call(out, _From, State=#state{tab=Tab, front=Front}) ->
@@ -211,32 +237,6 @@ handle_call(_Msg, _From, State) ->
 	{noreply, State}.
 
 -spec handle_cast(Msg :: term(), State0 :: #state{}) -> {'noreply', State1 :: #state{}}.
-handle_cast({in, Value}, State=#state{tab=Tab, front=Index, rear=Index, wait_queue=Waiting0}) ->
-	case dequeue_waiting(Waiting0) of
-		{undefined, Waiting1} ->
-			true=ets:insert(Tab, {Index, Value}),
-			{noreply, State#state{rear=Index+1, wait_queue=Waiting1}};
-		{Tag, ReplyTo, Waiting1} ->
-			ReplyTo ! {Tag, {ok, Value}},
-			{noreply, State#state{wait_queue=Waiting1}}
-	end;
-handle_cast({in, Value}, State=#state{tab=Tab, rear=Rear}) ->
-	ets:insert(Tab, {Rear, Value}),
-	{noreply, State#state{rear=Rear+1}};
-handle_cast({in_r, Value}, State=#state{tab=Tab, front=Index0, rear=Index0, wait_queue=Waiting0}) ->
-	case dequeue_waiting(Waiting0) of
-		{undefined, Waiting1} ->
-			Index1=Index0-1,
-			ets:insert(Tab, {Index1, Value}),
-			{noreply, State#state{front=Index1, wait_queue=Waiting1}};
-		{Tag, ReplyTo, Waiting1} ->
-			ReplyTo ! {Tag, {ok, Value}},
-			{noreply, State#state{wait_queue=Waiting1}}
-	end;
-handle_cast({in_r, Value}, State=#state{tab=Tab, front=Front0}) ->
-	Front1=Front0-1,
-	ets:insert(Tab, {Front1, Value}),
-	{noreply, State#state{front=Front1}};
 handle_cast(_Msg, State) ->
 	{noreply, State}.
 
