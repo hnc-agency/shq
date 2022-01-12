@@ -195,16 +195,16 @@ handle_call({out_wait, ReplyTo, Timeout}, _From={Pid, _}, State=#state{front=Ind
 handle_call({out_wait, _ReplyTo, _Timeout}, _From, State=#state{tab=Tab, front=Front}) ->
 	[{Front, Value}]=ets:take(Tab, Front),
 	{reply, {ok, Value}, State#state{front=Front+1}};
+handle_call(out_r, _From, State=#state{front=Index, rear=Index}) ->
+	{reply, empty, State};
+handle_call(out_r, _From, State=#state{tab=Tab, rear=Rear0}) ->
+	Rear1=Rear0-1,
+	[{Rear1, Value}]=ets:take(Tab, Rear1),
+	{reply, {ok, Value}, State#state{rear=Rear1}};
 handle_call({out_r_wait, ReplyTo, Timeout}, _From={Pid, _}, State=#state{front=Index, rear=Index, wait_queue=Waiting}) ->
 	Mon=monitor(process, Pid),
 	{reply, {queued, Mon}, State#state{wait_queue=queue:in({Mon, calc_maxts(Timeout), ReplyTo}, Waiting)}};
 handle_call({out_r_wait, _ReplyTo, _Timeout}, _From, State=#state{tab=Tab, rear=Rear0}) ->
-	Rear1=Rear0-1,
-	[{Rear1, Value}]=ets:take(Tab, Rear1),
-	{reply, {ok, Value}, State#state{rear=Rear1}};
-handle_call(out_r, _From, State=#state{front=Index, rear=Index}) ->
-	{reply, empty, State};
-handle_call(out_r, _From, State=#state{tab=Tab, rear=Rear0}) ->
 	Rear1=Rear0-1,
 	[{Rear1, Value}]=ets:take(Tab, Rear1),
 	{reply, {ok, Value}, State#state{rear=Rear1}};
