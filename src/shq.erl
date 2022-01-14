@@ -5,7 +5,7 @@
 -export([start/1, start/2]).
 -export([start_link/1, start_link/2]).
 -export([start_monitor/1, start_monitor/2]).
--export([stop/1, stop/3]).
+-export([stop/1]).
 -export([in/2, in/3, in_r/2, in_r/3]).
 -export([out/1, out/2, out_r/1, out_r/2]).
 -export([peek/1, peek_r/1]).
@@ -82,10 +82,6 @@ start_monitor(ServerName, Opts) when is_list(Opts) ->
 -spec stop(ServerRef :: server_ref()) -> 'ok'.
 stop(ServerRef) ->
 	gen_server:stop(ServerRef).
-
--spec stop(ServerRef :: server_ref(), Reason :: term(), Timeout :: (pos_integer() | 'infinity')) -> 'ok'.
-stop(ServerRef, Reason, Timeout) ->
-	gen_server:stop(ServerRef, Reason, Timeout).
 
 -spec in(ServerRef :: server_ref(), Value :: term()) -> 'ok' | 'full'.
 in(ServerRef, Value) ->
