@@ -93,7 +93,7 @@ in(ServerRef, Value) ->
 
 -spec in(ServerRef :: server_ref(), Value :: term(), Timeout :: timeout()) -> 'ok' | 'full'.
 in(ServerRef, Value, Timeout) when Timeout=:=infinity; is_integer(Timeout), Timeout>=0 ->
-	do_op_wait({in, rear, Value}, ServerRef, Timeout, full).
+	do_in_wait(rear, Value, ServerRef, Timeout).
 
 -spec in_r(ServerRef :: server_ref(), Value :: term()) -> 'ok' | 'full'.
 in_r(ServerRef, Value) ->
@@ -101,7 +101,7 @@ in_r(ServerRef, Value) ->
 
 -spec in_r(ServerRef :: server_ref(), Value :: term(), Timeout :: timeout()) -> 'ok' | 'full'.
 in_r(ServerRef, Value, Timeout) when Timeout=:=infinity; is_integer(Timeout), Timeout>=0 ->
-	do_op_wait({in, front, Value}, ServerRef, Timeout, full).
+	do_in_wait(front, Value, ServerRef, Timeout).
 
 -spec out(ServerRef :: server_ref()) -> {'ok', Value :: term()} | 'empty'.
 out(ServerRef) ->
@@ -109,7 +109,7 @@ out(ServerRef) ->
 
 -spec out(ServerRef :: server_ref(), Timeout :: timeout()) -> {'ok', Value :: term()} | 'empty'.
 out(ServerRef, Timeout) when Timeout=:=infinity; is_integer(Timeout), Timeout>=0 ->
-	do_op_wait({out, front}, ServerRef, Timeout, empty).
+	do_out_wait(front, ServerRef, Timeout).
 
 -spec out_r(ServerRef :: server_ref()) -> {'ok', Value :: term()} | 'empty'.
 out_r(ServerRef) ->
@@ -117,7 +117,7 @@ out_r(ServerRef) ->
 
 -spec out_r(ServerRef :: server_ref(), Timeout :: timeout()) -> {'ok', Value :: term()} | 'empty'.
 out_r(ServerRef, Timeout) when Timeout=:=infinity; is_integer(Timeout), Timeout>=0 ->
-	do_op_wait({out, rear}, ServerRef, Timeout, empty).
+	do_out_wait(rear, ServerRef, Timeout).
 
 -spec peek(ServerRef :: server_ref()) -> {'ok', Value :: term()} | 'empty'.
 peek(ServerRef) ->
@@ -145,30 +145,48 @@ do_resolve({Name, Node}) when is_atom(Name), is_atom(Node), Node=:=node() ->
 do_resolve(Dest={Name, Node}) when is_atom(Name), is_atom(Node) ->
 	Dest.
 
-do_op_wait(Op, ServerRef, Timeout, TimeoutReply) ->
+do_in_wait(Where, Value, ServerRef, Timeout) ->
 	Mon=monitor(process, do_resolve(ServerRef), [{alias, reply_demonitor}]),
-	try
-		gen_server:call(ServerRef, {Op, Mon, Timeout}, infinity)
-	of
-		{queued, Type, Tag} ->
+	case gen_server:call(ServerRef, {in, Where, Value, Mon, Timeout}, infinity) of
+		{wait, Tag} ->
+			receive
+				{Tag, accepting} ->
+					gen_server:call(ServerRef, {accept, Tag, Where, Value}, infinity);
+				{'DOWN', Mon, _, _, Reason} ->
+					exit(Reason)
+			after Timeout ->
+				ok=gen_server:call(ServerRef, {cancel, in, Tag}, infinity),
+				demonitor(Mon, [flush]),
+				receive {Tag, accepting} -> ok after 0 -> ok end,
+				full
+			end;
+		InstantReply ->
+			demonitor(Mon, [flush]),
+			InstantReply
+	end.
+
+do_out_wait(Where, ServerRef, Timeout) ->
+	Mon=monitor(process, do_resolve(ServerRef), [{alias, reply_demonitor}]),
+	case gen_server:call(ServerRef, {out, Where, Mon, Timeout}, infinity) of
+		{wait, Tag} ->
 			receive
 				{Tag, Reply} ->
 					Reply;
 				{'DOWN', Mon, _, _, Reason} ->
 					exit(Reason)
 			after Timeout ->
-				ok=gen_server:call(ServerRef, {cancel, Type, Tag}, infinity),
+				ok=gen_server:call(ServerRef, {cancel, out, Tag}, infinity),
+				demonitor(Mon, [flush]),
 				receive
 					{Tag, Reply} ->
 						Reply
 				after 0 ->
-					TimeoutReply
+					empty
 				end
 			end;
 		InstantReply ->
+			demonitor(Mon, [flush]),
 			InstantReply
-	after
-		demonitor(Mon, [flush])
 	end.
 
 verify_opts(Opts) ->
@@ -192,10 +210,55 @@ init(Opts) ->
 	{ok, #state{tab=Tab, max=Max}}.
 
 -spec handle_call(Msg :: term(), From :: term(), State0 :: #state{}) -> {'reply', Reply :: term(), State1 :: #state{}} | {'noreply', State1 :: #state{}}.
-handle_call({{in, Where, Value}, ReplyTo, Timeout}, _From={Pid, _}, State) ->
-	handle_in(Where, Value, ReplyTo, Timeout, Pid, State);
-handle_call({{out, Where}, ReplyTo, Timeout}, _From={Pid, _}, State) ->
-	handle_out(Where, ReplyTo, Timeout, Pid, State);
+handle_call({in, Where, Value, ReplyTo, Timeout}, _From={Pid, _}, State=#state{tab=Tab, front=Front, rear=Rear, max=Max, waiting_in=WaitingIn, waiting_out=WaitingOut0}) ->
+	case dequeue_waiting(out, WaitingOut0) of
+		{undefined, WaitingOut1} when Max=:=infinity; Rear-Front<Max ->
+			{Front1, Rear1}=do_in(Where, Value, Front, Rear, Tab),
+			{reply, ok, State#state{front=Front1, rear=Rear1, waiting_out=WaitingOut1}};
+		{undefined, WaitingOut1} when Timeout=:=0 ->
+			{reply, full, State#state{waiting_out=WaitingOut1}};
+		{undefined, WaitingOut1} ->
+			Mon=monitor(process, Pid),
+			{reply, {wait, Mon}, State#state{waiting_out=WaitingOut1, waiting_in=queue:in({Mon, calc_maxts(Timeout), ReplyTo}, WaitingIn)}};
+		{Tag, WaitingReplyTo, WaitingOut1} ->
+			WaitingReplyTo ! {Tag, {ok, Value}},
+			{reply, ok, State#state{waiting_out=WaitingOut1}}
+	end;
+handle_call({accept, Tag, Where, Value}, _From, State=#state{tab=Tab, front=Front, rear=Rear, waiting_out=WaitingOut0}) ->
+	case ets:take(Tab, Tag) of
+		[{Tag}] ->
+			case dequeue_waiting(out, WaitingOut0) of
+				{undefined, WaitingOut1} ->
+					{Front1, Rear1}=do_in(Where, Value, Front, Rear, Tab),
+					{reply, ok, State#state{front=Front1, rear=Rear1, waiting_out=WaitingOut1}};
+				{WaitingTag, WaitingReplyTo, WaitingOut1} ->
+					WaitingReplyTo ! {WaitingTag, {ok, Value}},
+					{reply, ok, State#state{waiting_out=WaitingOut1}}
+			end;
+		[] ->
+			{reply, {error, not_accepted}, State}
+	end;
+handle_call({out, Where, ReplyTo, Timeout}, _From={Pid, _}, State=#state{tab=Tab, front=Front, rear=Rear, waiting_in=WaitingIn0, waiting_out=WaitingOut}) ->
+	case dequeue_waiting({in, Tab}, WaitingIn0) of
+		{undefined, WaitingIn1} when Front=/=Rear ->
+			{Front1, Rear1, Value}=do_out(Where, Front, Rear, Tab),
+			{reply, {ok, Value}, State#state{front=Front1, rear=Rear1, waiting_in=WaitingIn1}};
+		{undefined, WaitingIn1} when Timeout=:=0 ->
+			{reply, empty, State#state{waiting_in=WaitingIn1}};
+		{undefined, WaitingIn1} ->
+			Mon=monitor(process, Pid),
+			{reply, {wait, Mon}, State#state{waiting_in=WaitingIn1, waiting_out=queue:in({Mon, calc_maxts(Timeout), ReplyTo}, WaitingOut)}};
+		{Tag, WaitingReplyTo, WaitingIn1} when Front=:=Rear ->
+			true=ets:insert(Tab, {Tag}),
+			WaitingReplyTo ! {Tag, accepting},
+			Mon=monitor(process, Pid),
+			{reply, {wait, Mon}, State#state{waiting_in=WaitingIn1, waiting_out=queue:in({Mon, calc_maxts(Timeout), ReplyTo}, WaitingOut)}};
+		{Tag, WaitingReplyTo, WaitingIn1} ->
+			true=ets:insert(Tab, {Tag}),
+			WaitingReplyTo ! {Tag, accepting},
+			{Front1, Rear1, Value}=do_out(Where, Front, Rear, Tab),
+			{reply, {ok, Value}, State#state{front=Front1, rear=Rear1, waiting_in=WaitingIn1}}
+	end;
 handle_call(peek, _From, State=#state{front=Index, rear=Index}) ->
 	{reply, empty, State};
 handle_call(peek, _From, State=#state{tab=Tab, front=Front}) ->
@@ -207,31 +270,20 @@ handle_call(peek_r, _From, State=#state{tab=Tab, rear=Rear0}) ->
 	Rear1=Rear0-1,
 	[{Rear1, Value}]=ets:lookup(Tab, Rear1),
 	{reply, {ok, Value}, State};
-handle_call({cancel, out, Tag}, _From, State=#state{waiting_out=Waiting0}) ->
-	Waiting1=queue:delete_with(
-		fun
-			({Mon, _MaxTS, _ReplyTo}) when Tag=:=Mon ->
-				demonitor(Mon, [flush]),
-				true;
-			(_Waiter) ->
-				false
-		 end,
-		Waiting0
-	),
-	{reply, ok, State#state{waiting_out=Waiting1}};
-handle_call({cancel, in, Tag}, _From, State=#state{tab=Tab, waiting_in=Waiting0}) ->
-	Waiting1=queue:delete_with(
-		fun
-			({Mon, _MaxTS, _ReplyTo}) when Tag=:=Mon ->
-				demonitor(Mon, [flush]),
-				true=ets:delete(Tab, Mon),
-				true;
-			(_Waiter) ->
-				false
-		end,
-		Waiting0
-	),
-	{reply, ok, State#state{waiting_in=Waiting1}};
+handle_call({cancel, Op, Tag}, _From, State=#state{tab=Tab, waiting_in=WaitingIn, waiting_out=WaitingOut}) ->
+	demonitor(Tag, [flush]),
+	Fn=fun ({Mon, _MaxTS, _ReplyTo}) -> Tag=:=Mon end,
+	case Op of
+		in ->
+			case ets:take(Tab, Tag) of
+				[{Tag}] ->
+					{reply, ok, State};
+				[] ->
+					{reply, ok, State#state{waiting_in=queue:delete_with(Fn, WaitingIn)}}
+			end;
+		out ->
+			{reply, ok, State#state{waiting_out=queue:delete_with(Fn, WaitingOut)}}
+	end;
 handle_call(size, _From, State=#state{front=Front, rear=Rear}) ->
 	{reply, Rear-Front, State};
 handle_call(_Msg, _From, State) ->
@@ -247,7 +299,7 @@ handle_info({'DOWN', Mon, process, _Pid, _Reason}, State=#state{tab=Tab, waiting
 	case ets:take(Tab, Mon) of
 		[] ->
 			{noreply, State#state{waiting_out=queue:delete_with(Fn, WaitingOut0)}};
-		[{Mon, _Op, _Value}] ->
+		[{Mon}] ->
 			{noreply, State#state{waiting_in=queue:delete_with(Fn, WaitingIn0)}}
 	end;
 handle_info(_Msg, State) ->
@@ -262,23 +314,6 @@ terminate(_Reason, _State) ->
 code_change(_OldVsn, State, _Extra) ->
 	{ok, State}.
 
-handle_in(Where, Value, ReplyTo, Timeout, Pid, State) ->
-	#state{tab=Tab, front=Front, rear=Rear, max=Max, waiting_in=WaitingIn, waiting_out=WaitingOut0}=State,
-	case dequeue_waiting(out, WaitingOut0) of
-		{undefined, WaitingOut1} when Max=:=infinity; Rear-Front<Max ->
-			{Front1, Rear1}=do_in(Where, Value, Front, Rear, Tab),
-			{reply, ok, State#state{front=Front1, rear=Rear1, waiting_out=WaitingOut1}};
-		{undefined, WaitingOut1} when Timeout=:=0 ->
-			{reply, full, State#state{waiting_out=WaitingOut1}};
-		{undefined, WaitingOut1} ->
-			Mon=monitor(process, Pid),
-			true=ets:insert(Tab, {Mon, Where, Value}),
-			{reply, {queued, in, Mon}, State#state{waiting_out=WaitingOut1, waiting_in=queue:in({Mon, calc_maxts(Timeout), ReplyTo}, WaitingIn)}};
-		{Tag, WaitingReplyTo, WaitingOut1} ->
-			WaitingReplyTo ! {Tag, {ok, Value}},
-			{reply, ok, State#state{waiting_out=WaitingOut1}}
-	end.
-
 do_in(rear, Value, Front, Rear, Tab) ->
 	true=ets:insert(Tab, {Rear, Value}),
 	{Front, Rear+1};
@@ -286,29 +321,6 @@ do_in(front, Value, Front, Rear, Tab) ->
 	Front1=Front-1,
 	true=ets:insert(Tab, {Front1, Value}),
 	{Front1, Rear}.
-
-handle_out(Where, ReplyTo, Timeout, Pid, State) ->
-	#state{tab=Tab, front=Front, rear=Rear, waiting_in=WaitingIn0, waiting_out=WaitingOut}=State,
-	case dequeue_waiting({in, Tab}, WaitingIn0) of
-		{undefined, WaitingIn1} when Front=/=Rear ->
-			{Front1, Rear1, Value}=do_out(Where, Front, Rear, Tab),
-			{reply, {ok, Value}, State#state{front=Front1, rear=Rear1, waiting_in=WaitingIn1}};
-		{undefined, WaitingIn1} when Timeout=:=0 ->
-			{reply, empty, State#state{waiting_in=WaitingIn1}};
-		{undefined, WaitingIn1} ->
-			Mon=monitor(process, Pid),
-			{reply, {queued, out, Mon}, State#state{waiting_in=WaitingIn1, waiting_out=queue:in({Mon, calc_maxts(Timeout), ReplyTo}, WaitingOut)}};
-		{Tag, WaitingReplyTo, WaitingIn1} when Front=:=Rear ->
-			{Tag, _Op, WaitingValue}=ets:take(Tab, Tag),
-			WaitingReplyTo ! {Tag, ok},
-			{reply, {ok, WaitingValue}, State#state{waiting_in=WaitingIn1}};
-		{Tag, WaitingReplyTo, WaitingIn1} ->
-			{Front1, Rear1, Value}=do_out(Where, Front, Rear, Tab),
-			WaitingReplyTo ! {Tag, ok},
-			[{Tag, WaitingWhere, WaitingValue}]=ets:take(Tab, Tag),
-			{Front2, Rear2}=do_in(WaitingWhere, WaitingValue, Front1, Rear1, Tab),
-			{reply, {ok, Value}, State#state{front=Front2, rear=Rear2, waiting_in=WaitingIn1}}
-	end.
 
 do_out(front, Front, Rear, Tab) ->
 	[{Front, Value}]=ets:take(Tab, Front),
