@@ -4,6 +4,7 @@
 deps
 ebin
 cover
+logs
 test/*.beam
 doc/*.html
 doc/edoc-info
