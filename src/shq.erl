@@ -18,6 +18,7 @@
 		front=0 :: integer(),
 		rear=0 :: integer(),
 		max=infinity :: non_neg_integer() | 'infinity',
+		monitors=#{} :: #{},
 		waiting_in=queue:new() :: queue:queue(),
 		waiting_out=queue:new() :: queue:queue()
 	}
@@ -151,7 +152,7 @@ do_in_wait(Where, Value, ServerRef, Timeout) ->
 				{'DOWN', Mon, _, _, Reason} ->
 					exit(Reason)
 			after Timeout ->
-				ok=gen_server:call(ServerRef, {cancel, in, Tag}, infinity),
+				ok=gen_server:call(ServerRef, {cancel, Tag}, infinity),
 				demonitor(Mon, [flush]),
 				receive {Tag, accepting} -> ok after 0 -> ok end,
 				full
@@ -171,7 +172,7 @@ do_out_wait(Where, ServerRef, Timeout) ->
 				{'DOWN', Mon, _, _, Reason} ->
 					exit(Reason)
 			after Timeout ->
-				ok=gen_server:call(ServerRef, {cancel, out, Tag}, infinity),
+				ok=gen_server:call(ServerRef, {cancel, Tag}, infinity),
 				demonitor(Mon, [flush]),
 				receive
 					{Tag, Reply} ->
@@ -206,54 +207,65 @@ init(Opts) ->
 	{ok, #state{tab=Tab, max=Max}}.
 
 -spec handle_call(Msg :: term(), From :: term(), State0 :: #state{}) -> {'reply', Reply :: term(), State1 :: #state{}} | {'noreply', State1 :: #state{}}.
-handle_call({in, Where, Value, ReplyTo, Timeout}, _From={Pid, _}, State=#state{tab=Tab, front=Front, rear=Rear, max=Max, waiting_in=WaitingIn, waiting_out=WaitingOut0}) ->
-	case dequeue_waiting(out, WaitingOut0) of
-		{undefined, WaitingOut1} when Max=:=infinity; Rear-Front<Max ->
+handle_call({in, Where, Value, ReplyTo, Timeout}, _From={Pid, _}, State=#state{tab=Tab, front=Front, rear=Rear, max=Max, monitors=Monitors0, waiting_in=WaitingIn, waiting_out=WaitingOut0}) ->
+	case dequeue_waiting(WaitingOut0, Monitors0) of
+		{undefined, WaitingOut1, Monitors1} when Max=:=infinity; Rear-Front<Max ->
+			%% none waiting for out, queue not full -> insert
 			{Front1, Rear1}=do_in(Where, Value, Front, Rear, Tab),
-			{reply, ok, State#state{front=Front1, rear=Rear1, waiting_out=WaitingOut1}};
-		{undefined, WaitingOut1} when Timeout=:=0 ->
-			{reply, full, State#state{waiting_out=WaitingOut1}};
-		{undefined, WaitingOut1} ->
+			{reply, ok, State#state{front=Front1, rear=Rear1, monitors=Monitors1, waiting_out=WaitingOut1}};
+		{undefined, WaitingOut1, Monitors1} when Timeout=:=0 ->
+			%% none waiting for out, queue full, in-timeout=0 -> full
+			{reply, full, State#state{monitors=Monitors1, waiting_out=WaitingOut1}};
+		{undefined, WaitingOut1, Monitors1} ->
+			%% none waiting for out, queue full, in-timeout>0 -> wait
 			Mon=monitor(process, Pid),
-			{reply, {wait, Mon}, State#state{waiting_out=WaitingOut1, waiting_in=queue:in({Mon, calc_maxts(Timeout), ReplyTo}, WaitingIn)}};
-		{Tag, WaitingReplyTo, WaitingOut1} ->
+			{reply, {wait, Mon}, State#state{monitors=Monitors1#{Mon => in}, waiting_out=WaitingOut1, waiting_in=queue:in({Mon, calc_maxts(Timeout), ReplyTo}, WaitingIn)}};
+		{Tag, WaitingReplyTo, WaitingOut1, Monitors1} ->
+			%% waiting out -> send value to waiting out, ok
 			WaitingReplyTo ! {Tag, {ok, Value}},
-			{reply, ok, State#state{waiting_out=WaitingOut1}}
+			{reply, ok, State#state{monitors=Monitors1, waiting_out=WaitingOut1}}
 	end;
-handle_call({accept, Tag, Where, Value}, _From, State=#state{tab=Tab, front=Front, rear=Rear, waiting_out=WaitingOut0}) ->
-	case ets:take(Tab, Tag) of
-		[{Tag}] ->
-			case dequeue_waiting(out, WaitingOut0) of
-				{undefined, WaitingOut1} ->
+handle_call({accept, Tag, Where, Value}, _From, State=#state{tab=Tab, front=Front, rear=Rear, monitors=Monitors0, waiting_out=WaitingOut0}) ->
+	case maps:take(Tag, Monitors0) of
+		{accepting, Monitors1} ->
+			%% accepting tag
+			case dequeue_waiting(WaitingOut0, Monitors1) of
+				{undefined, WaitingOut1, Monitors2} ->
+					%% none waiting for out -> insert
 					{Front1, Rear1}=do_in(Where, Value, Front, Rear, Tab),
-					{reply, ok, State#state{front=Front1, rear=Rear1, waiting_out=WaitingOut1}};
-				{WaitingTag, WaitingReplyTo, WaitingOut1} ->
+					{reply, ok, State#state{front=Front1, rear=Rear1, monitors=Monitors2, waiting_out=WaitingOut1}};
+				{WaitingTag, WaitingReplyTo, WaitingOut1, Monitors2} ->
+					%% waiting out -> send value to waiting out, ok
 					WaitingReplyTo ! {WaitingTag, {ok, Value}},
-					{reply, ok, State#state{waiting_out=WaitingOut1}}
+					{reply, ok, State#state{monitors=Monitors2, waiting_out=WaitingOut1}}
 			end;
-		[] ->
+		_ ->
+			%% tag not accepted
 			{reply, {error, not_accepted}, State}
 	end;
-handle_call({out, Where, ReplyTo, Timeout}, _From={Pid, _}, State=#state{tab=Tab, front=Front, rear=Rear, waiting_in=WaitingIn0, waiting_out=WaitingOut}) ->
-	case dequeue_waiting({in, Tab}, WaitingIn0) of
-		{undefined, WaitingIn1} when Front=/=Rear ->
+handle_call({out, Where, ReplyTo, Timeout}, _From={Pid, _}, State=#state{tab=Tab, front=Front, rear=Rear, monitors=Monitors0, waiting_in=WaitingIn0, waiting_out=WaitingOut}) ->
+	case dequeue_waiting(WaitingIn0, Monitors0) of
+		{undefined, WaitingIn1, Monitors1} when Front=/=Rear ->
+			%% none waiting in, queue not empty -> value
 			{Front1, Rear1, Value}=do_out(Where, Front, Rear, Tab),
-			{reply, {ok, Value}, State#state{front=Front1, rear=Rear1, waiting_in=WaitingIn1}};
-		{undefined, WaitingIn1} when Timeout=:=0 ->
-			{reply, empty, State#state{waiting_in=WaitingIn1}};
-		{undefined, WaitingIn1} ->
+			{reply, {ok, Value}, State#state{front=Front1, rear=Rear1, monitors=Monitors1, waiting_in=WaitingIn1}};
+		{undefined, WaitingIn1, Monitors1} when Timeout=:=0 ->
+			%% none waiting in, queue empty, out-timeout=0 -> empty
+			{reply, empty, State#state{monitors=Monitors1, waiting_in=WaitingIn1}};
+		{undefined, WaitingIn1, Monitors1} ->
+			%% none waiting in, queue empty, out-timeout>0 -> wait
 			Mon=monitor(process, Pid),
-			{reply, {wait, Mon}, State#state{waiting_in=WaitingIn1, waiting_out=queue:in({Mon, calc_maxts(Timeout), ReplyTo}, WaitingOut)}};
-		{Tag, WaitingReplyTo, WaitingIn1} when Front=:=Rear ->
-			true=ets:insert(Tab, {Tag}),
+			{reply, {wait, Mon}, State#state{monitors=Monitors1#{Mon => out}, waiting_in=WaitingIn1, waiting_out=queue:in({Mon, calc_maxts(Timeout), ReplyTo}, WaitingOut)}};
+		{Tag, WaitingReplyTo, WaitingIn1, Monitors1} when Front=:=Rear ->
+			%% waiting in, queue empty -> send accepting to waiting in, wait
 			WaitingReplyTo ! {Tag, accepting},
 			Mon=monitor(process, Pid),
-			{reply, {wait, Mon}, State#state{waiting_in=WaitingIn1, waiting_out=queue:in({Mon, calc_maxts(Timeout), ReplyTo}, WaitingOut)}};
-		{Tag, WaitingReplyTo, WaitingIn1} ->
-			true=ets:insert(Tab, {Tag}),
+			{reply, {wait, Mon}, State#state{monitors=Monitors1#{Tag => accepting, Mon => out}, waiting_in=WaitingIn1, waiting_out=queue:in({Mon, calc_maxts(Timeout), ReplyTo}, WaitingOut)}};
+		{Tag, WaitingReplyTo, WaitingIn1, Monitors1} ->
+			%% waiting in, queue not empty -> send accepting to waiting in, value
 			WaitingReplyTo ! {Tag, accepting},
 			{Front1, Rear1, Value}=do_out(Where, Front, Rear, Tab),
-			{reply, {ok, Value}, State#state{front=Front1, rear=Rear1, waiting_in=WaitingIn1}}
+			{reply, {ok, Value}, State#state{front=Front1, rear=Rear1, monitors=Monitors1#{Tag => accepting}, waiting_in=WaitingIn1}}
 	end;
 handle_call(peek, _From, State=#state{front=Index, rear=Index}) ->
 	{reply, empty, State};
@@ -266,19 +278,22 @@ handle_call(peek_r, _From, State=#state{tab=Tab, rear=Rear0}) ->
 	Rear1=Rear0-1,
 	[{Rear1, Value}]=ets:lookup(Tab, Rear1),
 	{reply, {ok, Value}, State};
-handle_call({cancel, Op, Tag}, _From, State=#state{tab=Tab, waiting_in=WaitingIn, waiting_out=WaitingOut}) ->
+handle_call({cancel, Tag}, _From, State=#state{monitors=Monitors0, waiting_in=WaitingIn, waiting_out=WaitingOut}) ->
 	demonitor(Tag, [flush]),
 	Fn=fun ({Mon, _MaxTS, _ReplyTo}) -> Tag=:=Mon end,
-	case Op of
-		in ->
-			case ets:take(Tab, Tag) of
-				[{Tag}] ->
-					{reply, ok, State};
-				[] ->
-					{reply, ok, State#state{waiting_in=queue:delete_with(Fn, WaitingIn)}}
-			end;
-		out ->
-			{reply, ok, State#state{waiting_out=queue:delete_with(Fn, WaitingOut)}}
+	case maps:take(Tag, Monitors0) of
+		{accepting, Monitors1} ->
+			%% Tag accepting
+			{reply, ok, State#state{monitors=Monitors1}};
+		{in, Monitors1} ->
+			%% Tag waiting in
+			{reply, ok, State#state{monitors=Monitors1, waiting_in=queue:delete_with(Fn, WaitingIn)}};
+		{out, Monitors1} ->
+			%% Tag waiting out
+			{reply, ok, State#state{monitors=Monitors1, waiting_out=queue:delete_with(Fn, WaitingOut)}};
+		_ ->
+			%% Tag unknown
+			{reply, ok, State}
 	end;
 handle_call(size, _From, State=#state{front=Front, rear=Rear}) ->
 	{reply, Rear-Front, State};
@@ -290,13 +305,21 @@ handle_cast(_Msg, State) ->
 	{noreply, State}.
 
 -spec handle_info(Msg :: term(), State0 :: #state{}) -> {'noreply', State1 :: #state{}}.
-handle_info({'DOWN', Mon, process, _Pid, _Reason}, State=#state{tab=Tab, waiting_in=WaitingIn0, waiting_out=WaitingOut0}) ->
+handle_info({'DOWN', Mon, process, _Pid, _Reason}, State=#state{monitors=Monitors0, waiting_in=WaitingIn, waiting_out=WaitingOut}) ->
 	Fn=fun ({WaitingMon, _MaxTS, _ReplyTo}) -> Mon=:=WaitingMon end,
-	case ets:take(Tab, Mon) of
-		[] ->
-			{noreply, State#state{waiting_out=queue:delete_with(Fn, WaitingOut0)}};
-		[{Mon}] ->
-			{noreply, State#state{waiting_in=queue:delete_with(Fn, WaitingIn0)}}
+	case maps:take(Mon, Monitors0) of
+		{accepting, Monitors1} ->
+			%% Mon accepting
+			{noreply, State#state{monitors=Monitors1}};
+		{in, Monitors1} ->
+			%% Mon waiting in
+			{noreply, State#state{monitors=Monitors1, waiting_in=queue:delete(Fn, WaitingIn)}};
+		{out, Monitors1} ->
+			%% Mon waiting out
+			{noreply, State#state{monitors=Monitors1, waiting_out=queue:delete(Fn, WaitingOut)}};
+		_ ->
+			%% Mon unknown
+			{noreply, State}
 	end;
 handle_info(_Msg, State) ->
 	{noreply, State}.
@@ -326,43 +349,27 @@ do_out(rear, Front, Rear, Tab) ->
 	[{Rear1, Value}]=ets:take(Tab, Rear1),
 	{Front, Rear1, Value}.
 
--spec dequeue_waiting(Type :: ('out' | {'in', Tab :: ets:tid()}), Waiting0) -> {Mon, ReplyTo, Waiting1} | {'undefined', Waiting1}
-	when WaitItem :: {Mon, MaxTs :: (integer() | 'infinity'), ReplyTo},
-	     Waiting0 :: queue:queue(WaitItem),
-	     Waiting1 :: queue:queue(WaitItem),
-	     Mon :: reference(),
-	     ReplyTo :: pid() | reference().
-dequeue_waiting(Type, Waiting) ->
+dequeue_waiting(Waiting, Monitors) ->
 	case queue:is_empty(Waiting) of
 		true ->
-			{undefined, Waiting};
+			{undefined, Waiting, Monitors};
 		false ->
 			Now=erlang:monotonic_time(millisecond),
-			dequeue_waiting(Type, queue:out(Waiting), Now)
+			dequeue_waiting(queue:out(Waiting), Monitors, Now)
 	end.
 
--spec dequeue_waiting(Type :: ('out' | {'in', Tab :: ets:tid()}), {'empty' | {'value', WaitItem}, Waiting}, Now :: integer()) -> {Mon, ReplyTo, Waiting} | {'undefined', Waiting}
-	when WaitItem :: {Mon, MaxTs :: (integer() | 'infinity'), ReplyTo},
-	     Waiting :: queue:queue(WaitItem),
-	     Mon :: reference(),
-	     ReplyTo :: pid() | reference().
-dequeue_waiting(_Type, {empty, Waiting}, _Now) ->
-	{undefined, Waiting};
-dequeue_waiting(_Type, {{value, {Mon, infinity, ReplyTo}}, Waiting}, _Now) ->
+dequeue_waiting({empty, Waiting}, Monitors, _Now) ->
+	{undefined, Waiting, Monitors};
+dequeue_waiting({{value, {Mon, infinity, ReplyTo}}, Waiting}, Monitors, _Now) ->
 	demonitor(Mon, [flush]),
-	{Mon, ReplyTo, Waiting};
-dequeue_waiting(_Type, {{value, {Mon, MaxTS, ReplyTo}}, Waiting}, Now) when MaxTS>Now ->
+	{Mon, ReplyTo, Waiting, maps:remove(Mon, Monitors)};
+dequeue_waiting({{value, {Mon, MaxTS, ReplyTo}}, Waiting}, Monitors, Now) when MaxTS>Now ->
 	demonitor(Mon, [flush]),
-	{Mon, ReplyTo, Waiting};
-dequeue_waiting(out, {{value, {Mon, _MaxTS, _ReplyTo}}, Waiting}, Now) ->
+	{Mon, ReplyTo, Waiting, maps:remove(Mon, Monitors)};
+dequeue_waiting({{value, {Mon, _MaxTS, _ReplyTo}}, Waiting}, Monitors, Now) ->
 	demonitor(Mon, [flush]),
-	dequeue_waiting(out, queue:out(Waiting), Now);
-dequeue_waiting(Type={in, Tab}, {{value, {Mon, _MaxTS, _ReplyTo}}, Waiting}, Now) ->
-	true=ets:delete(Tab, Mon),
-	demonitor(Mon, [flush]),
-	dequeue_waiting(Type, queue:out(Waiting), Now).
+	dequeue_waiting(queue:out(Waiting), maps:remove(Mon, Monitors), Now).
 
--spec calc_maxts(Timeout :: timeout()) -> integer() | 'infinity'.
 calc_maxts(infinity) ->
 	infinity;
 calc_maxts(Timeout) ->
