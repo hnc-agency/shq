@@ -22,8 +22,8 @@
 
 `ServerName` is a server name as used when starting a named `gen_server`.
 
-`Opts` is be a map or property list of options.
-Currently, the only accepted option is `max`, which is the maximum number of items the queue can hold. Allowed values are either a non-negative integer or the atom `infinity`.
+`Opts` is a map or property list of options.
+Currently, the only accepted option is `max`, which is the maximum number of items the queue can hold. Allowed values are either a non-negative integer or the atom `infinity` (default: `infinity`).
 
 ### Inserting an item
 
@@ -39,7 +39,7 @@ shq:in_r(ServerRef, Item, Timeout).
 
 `ServerRef` is a server reference as used with `gen_server`.
 
-`Item` is the item to insert.#
+`Item` is the item to insert.
 
 `Timeout` is a timeout to wait for a slot to become available if the queue is full (default: `0`).
 
@@ -90,3 +90,5 @@ The return value is a non-negative integer.
 ```erlang
 ok=shq:stop(ServerRef).
 ```
+
+All items left will be lost when a queue is stopped.
