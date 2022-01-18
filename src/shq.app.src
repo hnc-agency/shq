@@ -6,6 +6,6 @@
 		{vsn, "0.0.1"},
 		{modules, ['shq']},
 		{applications, [kernel, stdlib]},
-		{licenses, []}
+		{licenses, [<<"ISC">>]}
 	]
 }.
