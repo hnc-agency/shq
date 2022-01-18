@@ -19,8 +19,6 @@
 %% @author Jan Uhlig <juhlig@hnc-agency.org>
 %%
 %% @copyright 2022, Maria Scott, Jan Uhlig
-%%
-%% @version {@vsn}
 
 -module(shq).
 

@@ -5,8 +5,6 @@
 
 @copyright 2022 Maria Scott, Jan Uhlig
 
-@version {@vsn}
-
 @doc The `shq' library provides a module for inter-process queues.
 
 The typical use case is a producer/consumer scenario, where
