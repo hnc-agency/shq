@@ -2,7 +2,7 @@
 	application,
 	'shq',
 	[
-		{description, "Simple shared queue"},
+		{description, "Shared inter-process queues"},
 		{vsn, "0.0.1"},
 		{modules, ['shq']},
 		{applications, [kernel, stdlib]},
