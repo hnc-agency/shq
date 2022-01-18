@@ -1,0 +1,23 @@
+@title Shared inter-process queues.
+
+@author Maria Scott <maria-12648430@hnc-agency.org>
+@author Jan Uhlig <juhlig@hnc-agency.org>
+
+@copyright 2022 Maria Scott, Jan Uhlig
+
+@version {@vsn}
+
+@doc The `shq' library provides a module for inter-process queues.
+
+The typical use case is a producer/consumer scenario, where
+producer processes insert and consumer processes retrieve
+items from a queue.
+
+`shq' provides the ability to wait for inserts or retrievals to succeed
+within a given timeout, when a queue is full or empty, respecively.
+
+It is possible to use zero-length queues, such that inserts succeed only
+when a consumer wants to retrieve and retrievals only succeed
+when a producer wants to insert items.
+In this setup however, timeouts greater than 0 should be used by either
+the consumers or the producers or both, depending on use case.

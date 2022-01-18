@@ -13,6 +13,15 @@
 %% ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 %% OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
+%% @doc Shared inter-process queue.
+%%
+%% @author Maria Scott <maria-12648430@hnc-agency.org>
+%% @author Jan Uhlig <juhlig@hnc-agency.org>
+%%
+%% @copyright 2022, Maria Scott, Jan Uhlig
+%%
+%% @version {@vsn}
+
 -module(shq).
 
 -behavior(gen_server).
@@ -42,14 +51,17 @@
 -type server_name() :: {'local', Name :: atom()}
 		     | {'global', GlobalName :: term()}
 		     | {'via', Via :: module(), ViaName :: term()}.
+%% See gen_server:start/3,4, gen_server:start_link/3,4, gen_server:start_monitor/3,4.
 
 -type server_ref() :: pid()
 		    | Name :: atom()
 		    | {Name :: atom(), Node :: node()}
 		    | {'global', GlobalName :: term()}
 		    | {'via', Via :: module(), ViaName :: term()}.
+%% See gen_server:call/3,4, gen_server:cast/2.
 
 -type opts() :: opts_map() | opts_list().
+%% Queue options, either a map or proplist.
 
 -type opts_map() :: #{
 			'max' => non_neg_integer() | 'infinity'
@@ -59,86 +71,150 @@
 			{'max', non_neg_integer() | 'infinity'}
 		     ].
 
+%% @doc Start an non-linked anonymous queue.
+%% @param Opts Queue options.
+%% @return `{ok, Pid}'
 -spec start(Opts :: opts()) -> {'ok', pid()}.
 start(Opts) when is_map(Opts) ->
 	gen_server:start(?MODULE, verify_opts(Opts), []);
 start(Opts) when is_list(Opts) ->
 	start(proplists:to_map(Opts)).
 
+%% @doc Start an non-linked named queue.
+%% @param ServerName See gen_server:start/4.
+%% @param Opts Queue options.
+%% @return `{ok, Pid}'
 -spec start(ServerName :: server_name(), Opts :: opts()) -> {'ok', pid()} | {'error', Reason :: 'already_started'}.
 start(ServerName, Opts) when is_map(Opts) ->
 	gen_server:start(ServerName, ?MODULE, verify_opts(Opts), []);
 start(ServerName, Opts) when is_list(Opts) ->
 	start(ServerName, proplists:to_map(Opts)).
 
+%% @doc Start an linked anonymous queue.
+%% @param Opts Queue options.
+%% @return `{ok, Pid}'
 -spec start_link(Opts :: opts()) -> {'ok', pid()}.
 start_link(Opts) when is_map(Opts) ->
 	gen_server:start_link(?MODULE, verify_opts(Opts), []);
 start_link(Opts) when is_list(Opts) ->
 	start_link(proplists:to_map(Opts)).
 
+%% @doc Start an linked named queue.
+%% @param ServerName See gen_server:start_link/4.
+%% @param Opts Queue options.
+%% @return `{ok, Pid}'
 -spec start_link(ServerName :: server_name(), Opts :: opts()) -> {'ok', pid()} | {'error', Reason :: 'already_started'}.
 start_link(ServerName, Opts) when is_map(Opts) ->
 	gen_server:start_link(ServerName, ?MODULE, verify_opts(Opts), []);
 start_link(ServerName, Opts) when is_list(Opts) ->
 	start_link(ServerName, proplists:to_map(Opts)).
 
+%% @doc Start an monitored anonymous queue.
+%% @param Opts Queue options.
+%% @return `{ok, {Pid, Monitor}}'
 -spec start_monitor(Opts :: opts()) -> {'ok', {pid(), reference()}}.
 start_monitor(Opts) when is_map(Opts) ->
 	gen_server:start_monitor(?MODULE, verify_opts(Opts), []);
 start_monitor(Opts) when is_list(Opts) ->
 	start_monitor(proplists:to_map(Opts)).
 
+%% @doc Start an monitored named queue.
+%% @param ServerName See gen_server:start_monitor/4.
+%% @param Opts Queue options.
+%% @return `{ok, {Pid, Monitor}}'
 -spec start_monitor(ServerName :: server_name(), Opts :: opts()) -> {'ok', {pid(), reference()}} | {'error', Reason :: 'already_started'}.
 start_monitor(ServerName, Opts) when is_map(Opts) ->
 	gen_server:start_monitor(ServerName, ?MODULE, verify_opts(Opts), []);
 start_monitor(ServerName, Opts) when is_list(Opts) ->
 	start_monitor(ServerName, proplists:to_map(Opts)).
 
+%% @doc Stop a queue.
+%%      All remaining items will be discarded.
+%% @param ServerRef See gen_server:stop/1.
+%% @return `ok'.
 -spec stop(ServerRef :: server_ref()) -> 'ok'.
 stop(ServerRef) ->
 	gen_server:stop(ServerRef).
 
--spec in(ServerRef :: server_ref(), Value :: term()) -> 'ok' | 'full'.
-in(ServerRef, Value) ->
-	in(ServerRef, Value, 0).
+%% @doc Insert an item at the rear of a queue immediately.
+%% @param ServerRef See gen_server:call/2,3.
+%% @param Item The item to insert.
+%% @return `ok' if the item was inserted, or `full' if the queue was full.
+-spec in(ServerRef :: server_ref(), Item :: term()) -> 'ok' | 'full' | {'error', 'not_accepted'}.
+in(ServerRef, Item) ->
+	in(ServerRef, Item, 0).
 
--spec in(ServerRef :: server_ref(), Value :: term(), Timeout :: timeout()) -> 'ok' | 'full'.
-in(ServerRef, Value, Timeout) when Timeout=:=infinity; is_integer(Timeout), Timeout>=0 ->
-	do_in_wait(rear, Value, ServerRef, Timeout).
+%% @doc Insert an item at the rear of a queue, waiting for the given timeout if the queue is full.
+%% @param ServerRef See gen_server:call/2,3.
+%% @param Item The item to insert.
+%% @param Timeout Timeout in milliseconds.
+%% @return `ok' if the item was inserted, or `full' if the item could not be inserted within the given timeout.
+-spec in(ServerRef :: server_ref(), Item :: term(), Timeout :: timeout()) -> 'ok' | 'full' | {'error', 'not_accepted'}.
+in(ServerRef, Item, Timeout) when Timeout=:=infinity; is_integer(Timeout), Timeout>=0 ->
+	do_in_wait(rear, Item, ServerRef, Timeout).
 
--spec in_r(ServerRef :: server_ref(), Value :: term()) -> 'ok' | 'full'.
-in_r(ServerRef, Value) ->
-	in_r(ServerRef, Value, 0).
+%% @doc Insert an item at the front of a queue immediately.
+%% @param ServerRef See gen_server:call/2,3.
+%% @param Item The item to insert.
+%% @return `ok' if the item was inserted, or `full' if the queue was full.
+-spec in_r(ServerRef :: server_ref(), Item :: term()) -> 'ok' | 'full' | {'error', 'not_accepted'}.
+in_r(ServerRef, Item) ->
+	in_r(ServerRef, Item, 0).
 
--spec in_r(ServerRef :: server_ref(), Value :: term(), Timeout :: timeout()) -> 'ok' | 'full'.
-in_r(ServerRef, Value, Timeout) when Timeout=:=infinity; is_integer(Timeout), Timeout>=0 ->
-	do_in_wait(front, Value, ServerRef, Timeout).
+%% @doc Insert an item at the front of a queue, waiting for the given timeout if the queue is full.
+%% @param ServerRef See gen_server:call/2,3.
+%% @param Item The item to insert.
+%% @param Timeout Timeout in milliseconds.
+%% @return `ok' if the item was inserted, or `full' if the item could not be inserted within the given timeout.
+-spec in_r(ServerRef :: server_ref(), Item :: term(), Timeout :: timeout()) -> 'ok' | 'full' | {'error', 'not_accepted'}.
+in_r(ServerRef, Item, Timeout) when Timeout=:=infinity; is_integer(Timeout), Timeout>=0 ->
+	do_in_wait(front, Item, ServerRef, Timeout).
 
--spec out(ServerRef :: server_ref()) -> {'ok', Value :: term()} | 'empty'.
+%% @doc Retrieve and remove an item from the front of a queue immediately.
+%% @param ServerRef See gen_server:call/2,3.
+%% @return `{ok, Item}' if an item was retrieved, or `empty' if the queue was empty.
+-spec out(ServerRef :: server_ref()) -> {'ok', Item :: term()} | 'empty'.
 out(ServerRef) ->
 	out(ServerRef, 0).
 
--spec out(ServerRef :: server_ref(), Timeout :: timeout()) -> {'ok', Value :: term()} | 'empty'.
+%% @doc Retrieve and remove an item from the front of a queue, waiting for the given timeout if the queue is empty.
+%% @param ServerRef See gen_server:call/2,3.
+%% @param Timeout Timeout in milliseconds.
+%% @return `{ok, Item}'  if an item was retrieved, or `empty' if an item could not be retrieved within the given timeout.
+-spec out(ServerRef :: server_ref(), Timeout :: timeout()) -> {'ok', Item :: term()} | 'empty'.
 out(ServerRef, Timeout) when Timeout=:=infinity; is_integer(Timeout), Timeout>=0 ->
 	do_out_wait(front, ServerRef, Timeout).
 
--spec out_r(ServerRef :: server_ref()) -> {'ok', Value :: term()} | 'empty'.
+%% @doc Retrieve and remove an item from the rear of a queue immediately.
+%% @param ServerRef See gen_server:call/2,3.
+%% @return `{ok, Item}' if an item was retrieved, or `empty' if the queue was empty.
+-spec out_r(ServerRef :: server_ref()) -> {'ok', Item :: term()} | 'empty'.
 out_r(ServerRef) ->
 	out_r(ServerRef, 0).
 
--spec out_r(ServerRef :: server_ref(), Timeout :: timeout()) -> {'ok', Value :: term()} | 'empty'.
+%% @doc Retrieve and remove an item from the rear of a queue, waiting for the given timeout if the queue is empty.
+%% @param ServerRef See gen_server:call/2,3.
+%% @param Timeout Timeout in milliseconds.
+%% @return `{ok, Item}'  if an item was retrieved, or `empty' if an item could not be retrieved within the given timeout.
+-spec out_r(ServerRef :: server_ref(), Timeout :: timeout()) -> {'ok', Item :: term()} | 'empty'.
 out_r(ServerRef, Timeout) when Timeout=:=infinity; is_integer(Timeout), Timeout>=0 ->
 	do_out_wait(rear, ServerRef, Timeout).
 
--spec peek(ServerRef :: server_ref()) -> {'ok', Value :: term()} | 'empty'.
+%% @doc Retrieve an item from the front of a queue without removing it.
+%% @param ServerRef See gen_server:call/2,3.
+%% @return `{ok, Item}' if an item was retrieved, or `empty' if the queue was empty.
+-spec peek(ServerRef :: server_ref()) -> {'ok', Item :: term()} | 'empty'.
 peek(ServerRef) ->
 	gen_server:call(ServerRef, peek, infinity).
 
--spec peek_r(ServerRef :: server_ref()) -> {'ok', Value :: term()} | 'empty'.
+%% @doc Retrieve an item from the rear of a queue without removing it.
+%% @param ServerRef See gen_server:call/2,3.
+%% @return `{ok, Item}' if an item was retrieved, or `empty' if the queue was empty.
+-spec peek_r(ServerRef :: server_ref()) -> {'ok', Item :: term()} | 'empty'.
 peek_r(ServerRef) ->
 	gen_server:call(ServerRef, peek_r, infinity).
 
+%% @doc Get the number of items currently in a queue.
 -spec size(ServerRef :: server_ref()) -> Size :: non_neg_integer().
 size(ServerRef) ->
 	gen_server:call(ServerRef, size, infinity).
@@ -215,12 +291,14 @@ verify_opts(Opts) ->
 	),
 	Opts.
 
+%% @private
 -spec init(Opts :: opts()) -> {'ok', #state{}}.
 init(Opts) ->
 	Max=maps:get(max, Opts, infinity),
 	Tab=ets:new(?MODULE, [protected, set]),
 	{ok, #state{tab=Tab, max=Max}}.
 
+%% @private
 -spec handle_call(Msg :: term(), From :: term(), State0 :: #state{}) -> {'reply', Reply :: term(), State1 :: #state{}} | {'noreply', State1 :: #state{}}.
 handle_call({in, Where, Value, ReplyTo, Timeout}, _From={Pid, _}, State=#state{tab=Tab, front=Front, rear=Rear, max=Max, monitors=Monitors0, waiting_in=WaitingIn, waiting_out=WaitingOut0}) ->
 	case dequeue_waiting(WaitingOut0, Monitors0) of
@@ -315,10 +393,12 @@ handle_call(size, _From, State=#state{front=Front, rear=Rear}) ->
 handle_call(_Msg, _From, State) ->
 	{noreply, State}.
 
+%% @private
 -spec handle_cast(Msg :: term(), State0 :: #state{}) -> {'noreply', State1 :: #state{}}.
 handle_cast(_Msg, State) ->
 	{noreply, State}.
 
+%% @private
 -spec handle_info(Msg :: term(), State0 :: #state{}) -> {'noreply', State1 :: #state{}}.
 handle_info({'DOWN', Mon, process, _Pid, _Reason}, State=#state{monitors=Monitors0, waiting_in=WaitingIn, waiting_out=WaitingOut}) ->
 	Fn=fun ({WaitingMon, _MaxTS, _ReplyTo}) -> Mon=:=WaitingMon end,
@@ -339,10 +419,12 @@ handle_info({'DOWN', Mon, process, _Pid, _Reason}, State=#state{monitors=Monitor
 handle_info(_Msg, State) ->
 	{noreply, State}.
 
+%% @private
 -spec terminate(Reason :: term(), State :: #state{}) -> 'ok'.
 terminate(_Reason, _State) ->
 	ok.
 
+%% @private
 -spec code_change(OldVsn :: (term() | {'down', term()}), State, Extra :: term()) -> {ok, State}
 	when State :: #state{}.
 code_change(_OldVsn, State, _Extra) ->
