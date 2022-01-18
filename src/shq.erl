@@ -52,7 +52,7 @@
 %% See gen_server:start/3,4, gen_server:start_link/3,4, gen_server:start_monitor/3,4.
 
 -type server_ref() :: pid()
-		    | Name :: atom()
+		    | (Name :: atom())
 		    | {Name :: atom(), Node :: node()}
 		    | {'global', GlobalName :: term()}
 		    | {'via', Via :: module(), ViaName :: term()}.
@@ -138,7 +138,7 @@ stop(ServerRef) ->
 %% @param ServerRef See gen_server:call/2,3.
 %% @param Item The item to insert.
 %% @return `ok' if the item was inserted, or `full' if the queue was full.
--spec in(ServerRef :: server_ref(), Item :: term()) -> 'ok' | 'full' | {'error', 'not_accepted'}.
+-spec in(ServerRef :: server_ref(), Item :: term()) -> 'ok' | 'full' | {'error', Reason :: 'not_accepted'}.
 in(ServerRef, Item) ->
 	in(ServerRef, Item, 0).
 
@@ -147,7 +147,7 @@ in(ServerRef, Item) ->
 %% @param Item The item to insert.
 %% @param Timeout Timeout in milliseconds.
 %% @return `ok' if the item was inserted, or `full' if the item could not be inserted within the given timeout.
--spec in(ServerRef :: server_ref(), Item :: term(), Timeout :: timeout()) -> 'ok' | 'full' | {'error', 'not_accepted'}.
+-spec in(ServerRef :: server_ref(), Item :: term(), Timeout :: timeout()) -> 'ok' | 'full' | {'error', Reason :: 'not_accepted'}.
 in(ServerRef, Item, Timeout) when Timeout=:=infinity; is_integer(Timeout), Timeout>=0 ->
 	do_in_wait(rear, Item, ServerRef, Timeout).
 
@@ -155,7 +155,7 @@ in(ServerRef, Item, Timeout) when Timeout=:=infinity; is_integer(Timeout), Timeo
 %% @param ServerRef See gen_server:call/2,3.
 %% @param Item The item to insert.
 %% @return `ok' if the item was inserted, or `full' if the queue was full.
--spec in_r(ServerRef :: server_ref(), Item :: term()) -> 'ok' | 'full' | {'error', 'not_accepted'}.
+-spec in_r(ServerRef :: server_ref(), Item :: term()) -> 'ok' | 'full' | {'error', Reason :: 'not_accepted'}.
 in_r(ServerRef, Item) ->
 	in_r(ServerRef, Item, 0).
 
@@ -164,7 +164,7 @@ in_r(ServerRef, Item) ->
 %% @param Item The item to insert.
 %% @param Timeout Timeout in milliseconds.
 %% @return `ok' if the item was inserted, or `full' if the item could not be inserted within the given timeout.
--spec in_r(ServerRef :: server_ref(), Item :: term(), Timeout :: timeout()) -> 'ok' | 'full' | {'error', 'not_accepted'}.
+-spec in_r(ServerRef :: server_ref(), Item :: term(), Timeout :: timeout()) -> 'ok' | 'full' | {'error', Reason :: 'not_accepted'}.
 in_r(ServerRef, Item, Timeout) when Timeout=:=infinity; is_integer(Timeout), Timeout>=0 ->
 	do_in_wait(front, Item, ServerRef, Timeout).
 
