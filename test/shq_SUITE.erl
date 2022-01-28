@@ -20,9 +20,10 @@
 -export([all/0, groups/0]).
 -export([out_wait/1, out_r_wait/1]).
 -export([in_wait_0/1, in_r_wait_0/1, in_wait_1/1, in_r_wait_1/1]).
+-export([order_wait_0/1, order_wait_r_0/1, order_wait_1/1, order_wait_r_1/1]).
 
 all() ->
-	[{group, out_wait}, {group, in_wait}].
+	[{group, out_wait}, {group, in_wait}, {group, order}].
 
 groups() ->
 	[
@@ -42,6 +43,16 @@ groups() ->
 				in_r_wait_0,
 				in_wait_1,
 				in_r_wait_1
+			]
+		},
+		{
+			order,
+			[],
+			[
+				order_wait_0,
+				order_wait_r_0,
+				order_wait_1,
+				order_wait_r_1
 			]
 		}
 	].
@@ -120,4 +131,36 @@ do_in_wait_exit(Op, Max) ->
 		lists:seq(1, shq:size(Pid))
 	),
 	ok=shq:stop(Pid),
+	ok.
+
+order_wait_0(_) ->
+	doc("Ensure that waiting in are inserted and retrieved in correct order "
+	    "with max=0"),
+	do_order_wait(in, out, 0).
+
+order_wait_r_0(_) ->
+	doc("Ensure that waiting in_r are inserted and retrieved in correct order "
+	    "with max=0"),
+	do_order_wait(in_r, out_r, 0).
+
+order_wait_1(_) ->
+	doc("Ensure that waiting in are inserted and retrieved in correct order "
+	    "with max=1"),
+	do_order_wait(in, out, 1).
+
+order_wait_r_1(_) ->
+	doc("Ensure that waiting in_r are inserted and retrieved in correct order "
+	    "with max=1"),
+	do_order_wait(in_r, out_r, 1).
+
+do_order_wait(InOp, OutOp, Max) ->
+	{ok, Pid}=shq:start_link(#{max => Max}),
+	Items=lists:seq(1, 10),
+	_=[begin spawn_link(shq, InOp, [Pid, N, infinity]), timer:sleep(100) end || N <- Items],
+	lists:foreach(
+		fun (N) ->
+			{ok, N}=shq:OutOp(Pid)
+		end,
+		Items
+	),
 	ok.

@@ -3,9 +3,11 @@
 	'shq',
 	[
 		{description, "Shared inter-process queues"},
-		{vsn, "0.0.2"},
+		{vsn, "0.0.3"},
 		{modules, ['shq']},
 		{applications, [kernel, stdlib]},
-		{licenses, [<<"ISC">>]}
+		{licenses, [<<"ISC">>]},
+		{build_tools, [<<"make">>, <<"rebar3">>],
+		{links, [{<<"GitHub">>, <<"https://github.com/hnc-agency/shq">>}]}
 	]
 }.
