@@ -23,7 +23,8 @@
 `ServerName` is a server name as used when starting a named `gen_server`.
 
 `Opts` is a map or property list of options.
-Currently, the only accepted option is `max`, which is the maximum number of items the queue can hold. Allowed values are either a non-negative integer or the atom `infinity` (default: `infinity`).
+Currently, the only accepted option is `max`, which is the maximum number of items the queue can hold.
+Allowed values are either a non-negative integer or the atom `infinity` (default: `infinity`).
 
 ### Inserting an item
 
@@ -45,6 +46,9 @@ shq:in_r(ServerRef, Item, Timeout).
 
 The return value is either the atom `ok` if the item was queued, or the atom `full` if not.
 
+When these functions return `full`, it is guaranteed that the given item was not inserted, and
+will not be inserted later without calling this function again.
+
 ### Retrieving an item
 
 ```erlang
@@ -63,6 +67,9 @@ For `ServerRef`, see "Inserting".
 
 The return value is either a tuple `{ok, Item}`, or the atom `empty`.
 
+When these functions return `empty`, it is guaranteed that no item was removed from the queue, and
+none will be removed later without calling this function again.
+
 ### Peeking
 
 ```erlang
@@ -73,7 +80,9 @@ shq:peek(ServerRef).
 shq:peek_r(ServerRef).
 ```
 
-Peeking is the same as retrieving, but without removing the item from the queue. The operation will always return instantly, ie there is no way to wait for an item to become available if the queue is empty.
+Peeking is the same as retrieving, but without removing the item from the queue.
+The operation will always return instantly, ie there is no way to wait for an item to become available
+if the queue is empty.
 
 ### Retrieving queue size
 
@@ -92,3 +101,10 @@ ok=shq:stop(ServerRef).
 ```
 
 All items left will be lost when a queue is stopped.
+
+
+## Notes
+
+As `shq` queues are backed by `ets` tables of type `set`, the number of items in a queue does not affect its performance.
+
+Queue performance may be affected by how you use them, however.
