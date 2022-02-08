@@ -84,6 +84,21 @@ Peeking is the same as retrieving, but without removing the item from the queue.
 The operation will always return instantly, ie there is no way to wait for an item to become available
 if the queue is empty.
 
+### Draining a queue
+
+```erlang
+%% Draining a quee from the front
+shq:drain(ServerRef).
+
+%% Draining a queue from the rear
+shq:drain_r(ServerRef).
+```
+
+For `ServerRef`, see "Inserting".
+
+The return value is a list of all items that were in the queue at the time when the call was made,
+including the ones that were waiting for insertion.
+
 ### Retrieving queue size
 
 ```erlang

@@ -68,6 +68,47 @@ do_in_peek_out(InOp, OutOp, InItems, OutItems) ->
 
 	Res.
 
+prop_in_drain() ->
+	?FORALL(
+		Items,
+		non_empty(list(term())),
+		do_in_drain(in, drain, Items, Items)
+	).
+
+prop_in_r_drain_r() ->
+	?FORALL(
+		Items,
+		non_empty(list(term())),
+		do_in_drain(in_r, drain_r, Items, Items)
+	).
+
+prop_in_drain_r() ->
+	?FORALL(
+		Items,
+		non_empty(list(term())),
+		do_in_drain(in, drain_r, Items, lists:reverse(Items))
+	).
+
+prop_in_r_drain() ->
+	?FORALL(
+		Items,
+		non_empty(list(term())),
+		do_in_drain(in_r, drain, Items, lists:reverse(Items))
+	).
+
+do_in_drain(InOp, DrainOp, InItems, OutItems) ->
+	{ok, Pid}=shq:start_link(#{}),
+
+	_=[ok=shq:InOp(Pid, I) || I <- InItems],
+
+	Res=shq:size(Pid)=:=length(InItems)
+	andalso OutItems=:=shq:DrainOp(Pid)
+	andalso 0=:=shq:size(Pid),
+
+	ok=shq:stop(Pid),
+
+	Res.
+
 prop_lim_in_out() ->
 	?FORALL(
 		Lim,
@@ -126,7 +167,7 @@ do_lim_in_out(Lim, InOp, OutOp) ->
 prop_ops() ->
 	?FORALL(
 		{Lim0, Init, Ops},
-		{oneof([non_neg_integer(), infinity]), list(term()), list(oneof([{in, term()}, {in_r, term()}, out, out_r, peek, peek_r, size]))},
+		{oneof([non_neg_integer(), infinity]), list(term()), list(oneof([{in, term()}, {in_r, term()}, out, out_r, drain, drain_r, peek, peek_r, size]))},
 		begin
 			Lim=if
 				Lim0=:=infinity ->
@@ -179,6 +220,12 @@ prop_ops() ->
 						V=lists:last(Acc),
 						{ok, V}=shq:out_r(Pid),
 						lists:droplast(Acc);
+					(drain, Acc) ->
+						Acc=shq:drain(Pid),
+						[];
+					(drain_r, Acc) ->
+						Acc=lists:reverse(shq:drain_r(Pid)),
+						[];
 					(size, Acc) ->
 						true=length(Acc)=:=shq:size(Pid),
 						Acc
@@ -207,7 +254,7 @@ prop_ops() ->
 prop_concurrent_ops() ->
 	?FORALL(
 		{Lim0, Init, Ops},
-		{oneof([non_neg_integer(), infinity]), list(term()), list(oneof([{in, term()}, {in_r, term()}, out, out_r]))},
+		{oneof([non_neg_integer(), infinity]), list(term()), list(oneof([{in, term()}, {in_r, term()}, out, out_r, drain, drain_r]))},
 		begin
 			Lim=if
 				Lim0=:=infinity ->
@@ -229,7 +276,11 @@ prop_concurrent_ops() ->
 					(out) ->
 						spawn_monitor(fun () -> receive go -> exit({out, shq:out(Pid)}) end end);
 					(out_r) ->
-						spawn_monitor(fun () -> receive go -> exit({out, shq:out_r(Pid)}) end end)
+						spawn_monitor(fun () -> receive go -> exit({out, shq:out_r(Pid)}) end end);
+					(drain) ->
+						spawn_monitor(fun () -> receive go -> exit({drain, shq:drain(Pid)}) end end);
+					(drain_r) ->
+						spawn_monitor(fun () -> receive go -> exit({drain, shq:drain_r(Pid)}) end end)
 				end,
 				Ops
 			),
@@ -242,20 +293,14 @@ prop_concurrent_ops() ->
 							{'DOWN', CRef, process, CPid, {in, ok, V}} -> {[V|AccIns], AccOuts};
 							{'DOWN', CRef, process, CPid, {in, full, _V}} -> {AccIns, AccOuts};
 							{'DOWN', CRef, process, CPid, {out, {ok, V}}} -> {AccIns, [V|AccOuts]};
-							{'DOWN', CRef, process, CPid, {out, empty}} -> {AccIns, AccOuts}
+							{'DOWN', CRef, process, CPid, {out, empty}} -> {AccIns, AccOuts};
+							{'DOWN', CRef, process, CPid, {drain, Vs}} -> {AccIns, Vs++AccOuts}
 						end
 				end,
 				{Init, []},
 				PidRefs
 			),
-			Outs=lists:foldl(
-				fun (_, AccOuts) ->
-					{ok, V}=shq:out(Pid),
-					[V|AccOuts]
-				end,
-				Outs0,
-				lists:seq(1, shq:size(Pid))
-			),
+			Outs=Outs0++shq:drain(Pid),
 			empty=shq:out(Pid),
 
 			ok=shq:stop(Pid),
@@ -268,4 +313,3 @@ get_peekop(out) ->
 	peek;
 get_peekop(out_r) ->
 	peek_r.
-	

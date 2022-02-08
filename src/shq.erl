@@ -30,6 +30,7 @@
 -export([stop/1]).
 -export([in/2, in/3, in_r/2, in_r/3]).
 -export([out/1, out/2, out_r/1, out_r/2]).
+-export([drain/1, drain_r/1]).
 -export([peek/1, peek_r/1]).
 -export([size/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
@@ -212,6 +213,20 @@ out_r(ServerRef) ->
 out_r(ServerRef, Timeout) when Timeout=:=infinity; is_integer(Timeout), Timeout>=0 ->
 	do_out_wait(ServerRef, rear, Timeout).
 
+%% @doc Drain the queue from the front.
+%% @param ServerRef See gen_server:call/2,3.
+%% @return A list of all items in the queue, in queue order.
+-spec drain(ServerRef :: server_ref()) -> [Item :: term()].
+drain(ServerRef) ->
+	gen_server:call(ServerRef, {drain, front}, infinity).
+
+%% @doc Drain the queue from the rear.
+%% @param ServerRef See gen_server:call/2,3.
+%% @return A list of all items in the queue, in reverse queue order.
+-spec drain_r(ServerRef :: server_ref()) -> [Item :: term()].
+drain_r(ServerRef) ->
+	gen_server:call(ServerRef, {drain, rear}, infinity).
+
 %% @doc Retrieve an item from the front of a queue without removing it.
 %% @param ServerRef See gen_server:call/2,3.
 %% @return `{ok, Item}' if an item was retrieved, or `empty' if the queue was empty.
@@ -371,6 +386,9 @@ handle_call({out, Where, ReplyTo, Timeout}, _From={Pid, _}, State=#state{tab=Tab
 			reply_demonitor(Waiter, ok),
 			{reply, {ok, OutItem}, State#state{front=Front2, rear=Rear2, waiting=Waiting1}}
 	end;
+handle_call({drain, Where}, _From, State=#state{tab=Tab, front=Front0, rear=Rear0, waiting=Waiting0}) ->
+	{Front1, Rear1, Waiting1, Items}=do_drain(Where, Front0, Rear0, Tab, Waiting0),
+	{reply, Items, State#state{front=Front1, rear=Rear1, waiting=Waiting1}};
 handle_call(peek, _From, State=#state{front=Index, rear=Index}) ->
 	{reply, empty, State};
 handle_call(peek, _From, State=#state{tab=Tab, front=Front}) ->
@@ -413,6 +431,30 @@ terminate(_Reason, _State) ->
 	when State :: #state{}.
 code_change(_OldVsn, State, _Extra) ->
 	{ok, State}.
+
+-spec do_drain('front' | 'rear', Front0 :: integer(), Rear0 :: integer(), Tab :: ets:tid(), Waiting0 :: #waiting{}) -> {Front1 :: integer(), Rear1 :: integer(), Waiting1 :: #waiting{}, [Item :: term()]}.
+do_drain(Where, Front0, Rear0, Tab, Waiting0) ->
+	do_drain(Where, Front0, Rear0, Tab, Waiting0, []).
+
+-spec do_drain('front' | 'rear', Front0 :: integer(), Rear0 :: integer(), Tab :: ets:tid(), Waiting0 :: #waiting{}, Acc :: [term()]) -> {Front1 :: integer(), Rear1 :: integer(), Waiting1 :: #waiting{}, [Item :: term()]}.
+do_drain(Where, Front0, Rear0, Tab, Waiting0, Acc) ->
+	case dequeue_in(Waiting0, Tab) of
+		{undefined, Waiting1} when Front0=:=Rear0 ->
+			{Front0, Rear0, Waiting1, lists:reverse(Acc)};
+		{undefined, Waiting1} ->
+			{Front1, Rear1, Item}=do_out(Where, Front0, Rear0, Tab),
+			do_drain(Where, Front1, Rear1, Tab, Waiting1, [Item|Acc]);
+		{Waiter=#waiter{monitor=Mon}, Waiting1} when Front0=:=Rear0 ->
+			[{Mon, _InWhere, InItem}]=ets:take(Tab, Mon),
+			reply_demonitor(Waiter, ok),
+			do_drain(Where, Front0, Rear0, Tab, Waiting1, [InItem|Acc]);
+		{Waiter=#waiter{monitor=Mon}, Waiting1} ->
+			{Front1, Rear1, Item}=do_out(Where, Front0, Rear0, Tab),
+			[{Mon, InWhere, InItem}]=ets:take(Tab, Mon),
+			{Front2, Rear2}=do_in(InWhere, InItem, Front1, Rear1, Tab),
+			reply_demonitor(Waiter, ok),
+			do_drain(Where, Front2, Rear2, Tab, Waiting1, [Item|Acc])
+	end.
 
 -spec do_in('front' | 'rear', Item :: term(), Front0 :: integer(), Rear0 :: integer(), Tab :: ets:tid()) -> {Front1 :: integer(), Rear1 :: integer()}.
 do_in(rear, Item, Front, Rear, Tab) ->
