@@ -32,6 +32,9 @@
 -export([out/1, out/2, out_r/1, out_r/2]).
 -export([drain/1, drain_r/1]).
 -export([peek/1, peek_r/1]).
+-export([open/1]).
+-export([close/1]).
+-export([status/1]).
 -export([size/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
@@ -53,6 +56,7 @@
 
 -record(state,
 	{
+		status=open :: 'open' | 'closed',
 		tab :: ets:tid(),
 		front=0 :: integer(),
 		rear=0 :: integer(),
@@ -153,7 +157,7 @@ stop(ServerRef) ->
 %% @param ServerRef See gen_server:call/2,3.
 %% @param Item The item to insert.
 %% @return `ok' if the item was inserted, or `full' if the queue was full.
--spec in(ServerRef :: server_ref(), Item :: term()) -> 'ok' | 'full'.
+-spec in(ServerRef :: server_ref(), Item :: term()) -> 'ok' | 'full' | 'closed'.
 in(ServerRef, Item) ->
 	in(ServerRef, Item, 0).
 
@@ -162,7 +166,7 @@ in(ServerRef, Item) ->
 %% @param Item The item to insert.
 %% @param Timeout Timeout in milliseconds.
 %% @return `ok' if the item was inserted, or `full' if the item could not be inserted within the given timeout.
--spec in(ServerRef :: server_ref(), Item :: term(), Timeout :: timeout()) -> 'ok' | 'full'.
+-spec in(ServerRef :: server_ref(), Item :: term(), Timeout :: timeout()) -> 'ok' | 'full' | 'closed'.
 in(ServerRef, Item, Timeout) when Timeout=:=infinity; is_integer(Timeout), Timeout>=0 ->
 	do_in_wait(ServerRef, rear, Item, Timeout).
 
@@ -170,7 +174,7 @@ in(ServerRef, Item, Timeout) when Timeout=:=infinity; is_integer(Timeout), Timeo
 %% @param ServerRef See gen_server:call/2,3.
 %% @param Item The item to insert.
 %% @return `ok' if the item was inserted, or `full' if the queue was full.
--spec in_r(ServerRef :: server_ref(), Item :: term()) -> 'ok' | 'full'.
+-spec in_r(ServerRef :: server_ref(), Item :: term()) -> 'ok' | 'full' | 'closed'.
 in_r(ServerRef, Item) ->
 	in_r(ServerRef, Item, 0).
 
@@ -179,7 +183,7 @@ in_r(ServerRef, Item) ->
 %% @param Item The item to insert.
 %% @param Timeout Timeout in milliseconds.
 %% @return `ok' if the item was inserted, or `full' if the item could not be inserted within the given timeout.
--spec in_r(ServerRef :: server_ref(), Item :: term(), Timeout :: timeout()) -> 'ok' | 'full'.
+-spec in_r(ServerRef :: server_ref(), Item :: term(), Timeout :: timeout()) -> 'ok' | 'full' | 'closed'.
 in_r(ServerRef, Item, Timeout) when Timeout=:=infinity; is_integer(Timeout), Timeout>=0 ->
 	do_in_wait(ServerRef, front, Item, Timeout).
 
@@ -240,6 +244,35 @@ peek(ServerRef) ->
 -spec peek_r(ServerRef :: server_ref()) -> {'ok', Item :: term()} | 'empty'.
 peek_r(ServerRef) ->
 	gen_server:call(ServerRef, peek_r, infinity).
+
+%% @doc Opens a closed queue to accept subsequent inserts.
+%% @param ServerRef See gen_server:call/2,3.
+%% @return `ok'.
+%% @see close/1
+%% @see status/1
+-spec open(ServerRef :: server_ref()) -> 'ok'.
+open(ServerRef) ->
+	gen_server:cast(ServerRef, open).
+
+%% @doc Closes an open queue in order to reject subsequent inserts.
+%%      A closed queue can be reopened with a call to `open/1'.
+%% @param ServerRef See gen_server:call/2,3.
+%% @return `ok'.
+%% @see open/1
+%% @see status/1
+-spec close(ServerRef :: server_ref()) -> 'ok'.
+close(ServerRef) ->
+	gen_server:cast(ServerRef, close).
+
+%% @doc Get the queue status, which is either `open' or `closed'.
+%% @param ServerRef See gen_server:call/2,3.
+%% @return `open' if the queue is accepting inserts,
+%%         `closed' if the queue is closed and rejects inserts.
+%% @see open/1
+%% @see close/1
+-spec status(ServerRef :: server_ref()) -> 'open' | 'closed'.
+status(ServerRef) ->
+	gen_server:call(ServerRef, status, infinity).
 
 %% @doc Get the number of items currently in a queue.
 -spec size(ServerRef :: server_ref()) -> Size :: non_neg_integer().
@@ -341,6 +374,8 @@ init(Opts) ->
 
 %% @private
 -spec handle_call(Msg :: term(), From :: term(), State0 :: #state{}) -> {'reply', Reply :: term(), State1 :: #state{}} | {'noreply', State1 :: #state{}}.
+handle_call({in, _WhereItem, _ReplyTo, _Timeout}, _From, State=#state{status=closed}) ->
+	{reply, closed, State};
 handle_call({in, {Where, Item}, ReplyTo, Timeout}, _From={Pid, _}, State=#state{tab=Tab, front=Front, rear=Rear, max=Max, waiting=Waiting0}) ->
 	case dequeue_out(Waiting0, Tab) of
 		{undefined, Waiting1} when Max=:=infinity; Rear-Front<Max ->
@@ -403,6 +438,8 @@ handle_call(peek_r, _From, State=#state{tab=Tab, rear=Rear0}) ->
 handle_call({cancel, Tag}, _From, State=#state{tab=Tab, waiting=Waiting0}) ->
 	Waiting1=remove_waiter(Tag, Waiting0, Tab),
 	{reply, ok, State#state{waiting=Waiting1}};
+handle_call(status, _From, State=#state{status=Status}) ->
+	{reply, Status, State};
 handle_call(size, _From, State=#state{front=Front, rear=Rear}) ->
 	{reply, Rear-Front, State};
 handle_call(_Msg, _From, State) ->
@@ -410,6 +447,10 @@ handle_call(_Msg, _From, State) ->
 
 %% @private
 -spec handle_cast(Msg :: term(), State0 :: #state{}) -> {'noreply', State1 :: #state{}}.
+handle_cast(open, State) ->
+	{noreply, State#state{status=open}};
+handle_cast(close, State) ->
+	{noreply, State#state{status=closed}};
 handle_cast(_Msg, State) ->
 	{noreply, State}.
 

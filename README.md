@@ -44,10 +44,11 @@ shq:in_r(ServerRef, Item, Timeout).
 
 `Timeout` is a timeout to wait for a slot to become available if the queue is full (default: `0`).
 
-The return value is either the atom `ok` if the item was queued, or the atom `full` if not.
+The return value is either the atom `ok` if the item was queued, the atom `full` if the queue was
+full, or the atom `closed` if the queue was not accepting new items at the time of the call.
 
-When these functions return `full`, it is guaranteed that the given item was not inserted, and
-will not be inserted later without calling this function again.
+When these functions return `full` or `closed`, it is guaranteed that the given item was not inserted,
+and will not be inserted later without calling this function again.
 
 ### Retrieving an item
 
@@ -108,6 +109,23 @@ shq:size(ServerRef).
 Retrieves the number of items in the queue.
 
 The return value is a non-negative integer.
+
+### Closing and Reopening a queue
+
+```erlang
+%% Closing a queue
+ok=shq:close(ServerRef).
+
+%% Reopening a queue
+ok=shq:open(ServerRef).
+```
+
+For `ServerRef`, see "Inserting".
+
+When a queue is closed, all subsequent insert operations will be rejected and return `closed`
+until it is reopened.
+
+The queue status can be queried via `shq:status(ServerRef)`.
 
 ### Stopping a queue
 

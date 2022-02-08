@@ -21,9 +21,10 @@
 -export([out_wait/1, out_r_wait/1]).
 -export([in_wait_0/1, in_r_wait_0/1, in_wait_1/1, in_r_wait_1/1]).
 -export([order_wait_0/1, order_wait_r_0/1, order_wait_1/1, order_wait_r_1/1]).
+-export([open_close/1]).
 
 all() ->
-	[{group, out_wait}, {group, in_wait}, {group, order}].
+	[{group, out_wait}, {group, in_wait}, {group, order}, open_close].
 
 groups() ->
 	[
@@ -163,4 +164,25 @@ do_order_wait(InOp, OutOp, Max) ->
 		end,
 		Items
 	),
+	ok=shq:stop(Pid),
 	ok.
+
+open_close(_) ->
+	doc(""),
+	{ok, Pid}=shq:start_link(#{}),
+	open=shq:status(Pid),
+	ok=shq:in(Pid, a),
+	ok=shq:in_r(Pid, b),
+	ok=shq:close(Pid),
+	closed=shq:status(Pid),
+	closed=shq:in(Pid, c),
+	closed=shq:in_r(Pid, d),
+	{ok, b}=shq:out(Pid),
+	{ok, a}=shq:out_r(Pid),
+	empty=shq:out(Pid),
+	empty=shq:out_r(Pid),
+	ok=shq:open(Pid),
+	open=shq:status(Pid),
+	ok=shq:in(Pid, c),
+	ok=shq:in_r(Pid, d),
+	ok=shq:stop(Pid).
