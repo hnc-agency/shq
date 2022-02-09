@@ -250,16 +250,24 @@ peek_r(ServerRef) ->
 %% @return `ok'.
 %% @see close/1
 %% @see status/1
+%% @see in/2
+%% @see in/3
+%% @see in_r/2
+%% @see in_r/3
 -spec open(ServerRef :: server_ref()) -> 'ok'.
 open(ServerRef) ->
 	gen_server:cast(ServerRef, open).
 
-%% @doc Closes an open queue in order to reject subsequent inserts.
+%% @doc Closes an open queue in order to reject subsequent and waiting inserts.
 %%      A closed queue can be reopened with a call to `open/1'.
 %% @param ServerRef See gen_server:call/2,3.
 %% @return `ok'.
 %% @see open/1
 %% @see status/1
+%% @see in/2
+%% @see in/3
+%% @see in_r/2
+%% @see in_r/3
 -spec close(ServerRef :: server_ref()) -> 'ok'.
 close(ServerRef) ->
 	gen_server:cast(ServerRef, close).
@@ -449,8 +457,9 @@ handle_call(_Msg, _From, State) ->
 -spec handle_cast(Msg :: term(), State0 :: #state{}) -> {'noreply', State1 :: #state{}}.
 handle_cast(open, State) ->
 	{noreply, State#state{status=open}};
-handle_cast(close, State) ->
-	{noreply, State#state{status=closed}};
+handle_cast(close, State=#state{tab=Tab, waiting=Waiting0}) ->
+	Waiting1=do_close(Waiting0, Tab),
+	{noreply, State#state{status=closed, waiting=Waiting1}};
 handle_cast(_Msg, State) ->
 	{noreply, State}.
 
@@ -476,6 +485,16 @@ code_change(_OldVsn, State, _Extra) ->
 -spec do_drain('front' | 'rear', Front0 :: integer(), Rear0 :: integer(), Tab :: ets:tid(), Waiting0 :: #waiting{}) -> {Front1 :: integer(), Rear1 :: integer(), Waiting1 :: #waiting{}, [Item :: term()]}.
 do_drain(Where, Front0, Rear0, Tab, Waiting0) ->
 	do_drain(Where, Front0, Rear0, Tab, Waiting0, []).
+
+-spec do_close(Waiting0 :: #waiting{}, Tab :: ets:tid()) -> Waiting1 :: #waiting{}.
+do_close(Waiting0, Tab) ->
+	case dequeue_in(Waiting0, Tab) of
+		{undefined, Waiting1} ->
+			Waiting1;
+		{Waiter=#waiter{}, Waiting1} ->
+			reply_demonitor(Waiter, closed),
+			do_close(Waiting1, Tab)
+	end.
 
 -spec do_drain('front' | 'rear', Front0 :: integer(), Rear0 :: integer(), Tab :: ets:tid(), Waiting0 :: #waiting{}, Acc :: [term()]) -> {Front1 :: integer(), Rear1 :: integer(), Waiting1 :: #waiting{}, [Item :: term()]}.
 do_drain(Where, Front0, Rear0, Tab, Waiting0, Acc) ->
