@@ -141,3 +141,9 @@ All items left will be lost when a queue is stopped.
 As `shq` queues are backed by `ets` tables of type `set`, the number of items in a queue does not affect its performance.
 
 Queue performance may be affected by how you use them, however.
+
+
+## Authors
+
+* Maria Scott (Maria-12648430)
+* Jan Uhlig (juhlig)
