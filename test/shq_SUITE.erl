@@ -18,32 +18,93 @@
 -import(ct_helper, [doc/1]).
 
 -export([all/0, groups/0]).
--export([out_wait/1, out_r_wait/1]).
--export([in_wait_0/1, in_r_wait_0/1, in_wait_1/1, in_r_wait_1/1]).
+-export([start_anonymous/1, start_local/1, start_global/1, start_via/1]).
+-export([start_link_anonymous/1, start_link_local/1, start_link_global/1, start_link_via/1]).
+-export([start_monitor_anonymous/1, start_monitor_local/1, start_monitor_global/1, start_monitor_via/1]).
+-export([out_wait_anonymous/1, out_wait_local/1, out_wait_global/1, out_wait_via/1]).
+-export([out_r_wait_anonymous/1, out_r_wait_local/1, out_r_wait_global/1, out_r_wait_via/1]).
+-export([in_wait_anonymous_0/1, in_wait_local_0/1, in_wait_global_0/1, in_wait_via_0/1]).
+-export([in_wait_anonymous_1/1, in_wait_local_1/1, in_wait_global_1/1, in_wait_via_1/1]).
+-export([in_r_wait_anonymous_0/1, in_r_wait_local_0/1, in_r_wait_global_0/1, in_r_wait_via_0/1]).
+-export([in_r_wait_anonymous_1/1, in_r_wait_local_1/1, in_r_wait_global_1/1, in_r_wait_via_1/1]).
 -export([order_wait_0/1, order_wait_r_0/1, order_wait_1/1, order_wait_r_1/1]).
 -export([open_close/1]).
 
 all() ->
-	[{group, out_wait}, {group, in_wait}, {group, order}, open_close].
+	[{group, start}, {group, out_wait}, {group, in_wait}, {group, order}, open_close].
 
 groups() ->
 	[
+	 	{
+			start,
+			[],
+			[
+				{
+					non_linked,
+					[],
+					[
+						start_anonymous,
+						start_local,
+						start_global,
+						start_via
+					]
+				},
+				{
+					linked,
+					[],
+					[
+						start_link_anonymous,
+						start_link_local,
+						start_link_global,
+						start_link_via
+					]
+				},
+				{
+					monitored,
+					[],
+					[
+						start_monitor_anonymous,
+						start_monitor_local,
+						start_monitor_global,
+						start_monitor_via
+					]
+				}
+			]
+		},
 		{
 			out_wait,
 			[],
 			[
-				out_wait,
-				out_r_wait
+				out_wait_anonymous,
+				out_wait_local,
+				out_wait_global,
+				out_wait_via,
+				out_r_wait_anonymous,
+				out_r_wait_local,
+				out_r_wait_global,
+				out_r_wait_via
 			]
 		},
 		{
 			in_wait,
 			[],
 			[
-				in_wait_0,
-				in_r_wait_0,
-				in_wait_1,
-				in_r_wait_1
+				in_wait_anonymous_0,
+				in_wait_local_0,
+				in_wait_global_0,
+				in_wait_via_0,
+				in_wait_anonymous_1,
+				in_wait_local_1,
+				in_wait_global_1,
+				in_wait_via_1,
+				in_r_wait_anonymous_0,
+				in_r_wait_local_0,
+				in_r_wait_global_0,
+				in_r_wait_via_0,
+				in_r_wait_anonymous_1,
+				in_r_wait_local_1,
+				in_r_wait_global_1,
+				in_r_wait_via_1
 			]
 		},
 		{
@@ -58,100 +119,308 @@ groups() ->
 		}
 	].
 
-out_wait(_) ->
-	doc("Ensure that waiting out works."),
-	do_out_wait(out),
-	do_out_wait_exit(out).
+start_anonymous(_) ->
+	doc("Ensure that starting a non-linked anonymous queue works."),
+	do_start(undefined).
 
-out_r_wait(_) ->
-	doc("Ensure that waiting out_r works."),
-	do_out_wait(out_r),
-	do_out_wait_exit(out_r).
+start_local(_) ->
+	doc("Ensure that starting a non-linked locally registered queue works."),
+	do_start({local, ?MODULE}).
 
-do_out_wait(Op) ->
-	{ok, Pid}=shq:start_link(#{}),
-	timer:apply_after(1000, shq, in, [Pid, test]),
-	empty=shq:Op(Pid),
-	empty=shq:Op(Pid, 100),
-	{ok, test}=shq:Op(Pid, 2000),
-	ok=shq:stop(Pid),
+start_global(_) ->
+	doc("Ensure that starting a non-linked globally registered queue works."),
+	do_start({global, ?MODULE}).
+
+start_via(_) ->
+	doc("Ensure that starting a non-linked via-registered queue works."),
+	do_start({via, global, ?MODULE}).
+
+do_start(ServerName) ->
+	Self=self(),
+	CPid=spawn_link(
+		fun () ->
+			{Pid, Name}=do_start_shq(ServerName, start, #{}),
+			open=shq:status(Name),
+			Self ! {self(), Pid, Name},
+			ok=receive {Self, ok} -> ok after 1000 -> exit(timeout) end,
+			unlink(Self),
+			exit(crash)
+		end
+	),
+	CMon=monitor(process, CPid),
+	{Pid, Name}=receive {CPid, QPid, QName} -> {QPid, QName} after 1000 -> exit(timeout) end,
+	Mon=monitor(process, Pid),
+	CPid ! {self(), ok},
+	ok=receive {'DOWN', CMon, process, CPid, crash} -> ok after 1000 -> exit(timeout) end,
+	ok=receive {'DOWN', Mon, process, Pid, Reason} -> exit({unexpected_exit, Reason}) after 1000 -> ok end,
+	demonitor(Mon, [flush]),
+	ok=shq:stop(Name),
 	ok.
 
-do_out_wait_exit(Op) ->
-	{ok, Pid}=shq:start_link(#{}),
-	{CPid, CMon}=spawn_monitor(fun () -> shq:Op(Pid, 1000) end),
+start_link_anonymous(_) ->
+	doc("Ensure that starting a linked anonymous queue works."),
+	do_start_link(undefined).
+
+start_link_local(_) ->
+	doc("Ensure that starting a linked locally registered queue works."),
+	do_start_link({local, ?MODULE}).
+
+start_link_global(_) ->
+	doc("Ensure that starting a linked globally registered queue works."),
+	do_start_link({global, ?MODULE}).
+
+start_link_via(_) ->
+	doc("Ensure that starting a linked via-registered queue works."),
+	do_start_link({via, global, ?MODULE}).
+
+do_start_link(ServerName) ->
+	Self=self(),
+	CPid=spawn_link(
+		fun () ->
+			{Pid, Name}=do_start_shq(ServerName, start_link, #{}),
+			open=shq:status(Name),
+			Self ! {self(), Pid, Name},
+			ok=receive {Self, ok} -> ok after 1000 -> exit(timeout) end,
+			unlink(Self),
+			exit(crash)
+		end
+	),
+	CMon=monitor(process, CPid),
+	{Pid, _Name}=receive {CPid, QPid, QName} -> {QPid, QName} after 1000 -> exit(timeout) end,
+	Mon=monitor(process, Pid),
+	CPid ! {self(), ok},
+	ok=receive {'DOWN', CMon, process, CPid, crash} -> ok after 1000 -> exit(timeout) end,
+	ok=receive {'DOWN', Mon, process, Pid, crash} -> ok after 1000 -> exit(timeout) end,
+	demonitor(Mon, [flush]),
+	ok.
+
+start_monitor_anonymous(_) ->
+	doc("Ensure that starting a monitored anonymous queue works."),
+	do_start_monitor(undefined).
+
+start_monitor_local(_) ->
+	doc("Ensure that starting a monitored locally registered queue works."),
+	do_start_monitor({local, ?MODULE}).
+
+start_monitor_global(_) ->
+	doc("Ensure that starting a monitored globally registered queue works."),
+	do_start_monitor({global, ?MODULE}).
+
+start_monitor_via(_) ->
+	doc("Ensure that starting a monitored via-registered queue works."),
+	do_start_monitor({via, global, ?MODULE}).
+
+do_start_monitor(ServerName) ->
+	{{Pid, Mon}, Name}=do_start_shq(ServerName, start_monitor, #{}),
+	open=shq:status(Name),
+	exit(Pid, kill),
+	receive {'DOWN', Mon, process, Pid, killed} -> ok after 1000 -> exit(timeout) end,
+	ok.
+
+do_start_shq(Op, Opts) ->
+	case shq:Op(Opts) of
+		{ok, {Pid, Mon}} ->
+			{{Pid, Mon}, Pid};
+		{ok, Pid} ->
+			{Pid, Pid}
+	end.
+
+do_start_shq(undefined, Op, Opts) ->
+	do_start_shq(Op, Opts);
+do_start_shq(Name={local, LocalName}, Op, Opts) ->
+	{ok, Res}=shq:Op(Name, Opts),
+	{Res, LocalName};
+do_start_shq(Name={global, _}, Op, Opts) ->
+	{ok, Res}=shq:Op(Name, Opts),
+	{Res, Name};
+do_start_shq(Name={via, _, _}, Op, Opts) ->
+	{ok, Res}=shq:Op(Name, Opts),
+	{Res, Name}.
+
+out_wait_anonymous(_) ->
+	doc("Ensure that waiting out works for an anonymous queue."),
+	do_out_wait(undefined, out),
+	do_out_wait_exit(undefined, out).
+
+out_wait_local(_) ->
+	doc("Ensure that waiting out works for a locally named queue."),
+	do_out_wait({local, ?MODULE}, out),
+	do_out_wait_exit({local, ?MODULE}, out).
+
+out_wait_global(_) ->
+	doc("Ensure that waiting out works for a globally named queue."),
+	do_out_wait({global, ?MODULE}, out),
+	do_out_wait_exit({global, ?MODULE}, out).
+
+out_wait_via(_) ->
+	doc("Ensure that waiting out works for a via-named queue."),
+	do_out_wait({via, global, ?MODULE}, out),
+	do_out_wait_exit({via, global, ?MODULE}, out).
+
+out_r_wait_anonymous(_) ->
+	doc("Ensure that waiting out_r works for an anonymous queue."),
+	do_out_wait(undefined, out_r),
+	do_out_wait_exit(undefined, out_r).
+
+out_r_wait_local(_) ->
+	doc("Ensure that waiting out_r works for a locally named queue."),
+	do_out_wait({local, ?MODULE}, out_r),
+	do_out_wait_exit({local, ?MODULE}, out_r).
+
+out_r_wait_global(_) ->
+	doc("Ensure that waiting out_r works for a globally named queue."),
+	do_out_wait({global, ?MODULE}, out_r),
+	do_out_wait_exit({global, ?MODULE}, out_r).
+
+out_r_wait_via(_) ->
+	doc("Ensure that waiting out_r works for a via-named queue."),
+	do_out_wait({via, global, ?MODULE}, out_r),
+	do_out_wait_exit({via, global, ?MODULE}, out_r).
+
+do_out_wait(ServerName, Op) ->
+	{_Pid, Name}=do_start_shq(ServerName, start_link, #{}),
+	timer:apply_after(1000, shq, in, [Name, test]),
+	empty=shq:Op(Name),
+	empty=shq:Op(Name, 100),
+	{ok, test}=shq:Op(Name, 2000),
+	ok=shq:stop(Name),
+	ok.
+
+do_out_wait_exit(ServerName, Op) ->
+	{_Pid, Name}=do_start_shq(ServerName, start_link, #{}),
+	{CPid, CMon}=spawn_monitor(fun () -> shq:Op(Name, 1000) end),
 	timer:sleep(100),
 	exit(CPid, kill),
 	receive {'DOWN', CMon, process, CPid, killed} -> ok end,
 	timer:sleep(1000),
-	ok=shq:in(Pid, test),
-	{ok, test}=shq:Op(Pid),
-	ok=shq:stop(Pid),
+	ok=shq:in(Name, test),
+	{ok, test}=shq:Op(Name),
+	ok=shq:stop(Name),
 	ok.
 
-in_wait_0(_) ->
-	doc("Ensure that waiting in works with max=0."),
-	do_in_wait(in, 0),
-	do_in_wait_exit(in, 0).
+in_wait_anonymous_0(_) ->
+	doc("Ensure that waiting in works with max=0 for an anonymous queue."),
+	do_in_wait(undefined, in, 0),
+	do_in_wait_exit(undefined, in, 0).
 
-in_r_wait_0(_) ->
-	doc("Ensure that waiting in_r works with max=0."),
-	do_in_wait(in_r, 0),
-	do_in_wait_exit(in_r, 0).
+in_wait_local_0(_) ->
+	doc("Ensure that waiting in works with max=0 for a locally named queue."),
+	do_in_wait({local, ?MODULE}, in, 0),
+	do_in_wait_exit({local, ?MODULE}, in, 0).
 
-in_wait_1(_) ->
-	doc("Ensure that waiting in works with max=1."),
-	do_in_wait(in, 1),
-	do_in_wait_exit(in, 1).
+in_wait_global_0(_) ->
+	doc("Ensure that waiting in works with max=0 for a globally named queue."),
+	do_in_wait({global, ?MODULE}, in, 0),
+	do_in_wait_exit({global, ?MODULE}, in, 0).
 
-in_r_wait_1(_) ->
-	doc("Ensure that waiting in_r works with max=1."),
-	do_in_wait(in_r, 1),
-	do_in_wait_exit(in_r, 1).
+in_wait_via_0(_) ->
+	doc("Ensure that waiting in works with max=0 for a via-named queue."),
+	do_in_wait({via, global, ?MODULE}, in, 0),
+	do_in_wait_exit({via, global, ?MODULE}, in, 0).
 
-do_in_wait(Op, Max) ->
-	{ok, Pid}=shq:start_link(#{max => Max}),
-	_=[ok=shq:Op(Pid, N) || N <- lists:seq(1, Max)],
-	timer:apply_after(1000, shq, out, [Pid]),
-	full=shq:Op(Pid, test),
-	full=shq:Op(Pid, test, 100),
-	ok=shq:Op(Pid, test, 2000),
-	ok=shq:stop(Pid),
+in_r_wait_anonymous_0(_) ->
+	doc("Ensure that waiting in_r works with max=0 for an anonymous queue."),
+	do_in_wait(undefined, in_r, 0),
+	do_in_wait_exit(undefined, in_r, 0).
+
+in_r_wait_local_0(_) ->
+	doc("Ensure that waiting in_r works with max=0 for a locally named queue."),
+	do_in_wait({local, ?MODULE}, in_r, 0),
+	do_in_wait_exit({local, ?MODULE}, in_r, 0).
+
+in_r_wait_global_0(_) ->
+	doc("Ensure that waiting in_r works with max=0 for a globally named queue."),
+	do_in_wait({global, ?MODULE}, in_r, 0),
+	do_in_wait_exit({global, ?MODULE}, in_r, 0).
+
+in_r_wait_via_0(_) ->
+	doc("Ensure that waiting in_r works with max=0 for a via-named queue."),
+	do_in_wait({via, global, ?MODULE}, in_r, 0),
+	do_in_wait_exit({via, global, ?MODULE}, in_r, 0).
+
+in_wait_anonymous_1(_) ->
+	doc("Ensure that waiting in works with max=1 for an anonymous queue."),
+	do_in_wait(undefined, in, 1),
+	do_in_wait_exit(undefined, in, 1).
+
+in_wait_local_1(_) ->
+	doc("Ensure that waiting in works with max=1 for a locally named queue."),
+	do_in_wait({local, ?MODULE}, in, 1),
+	do_in_wait_exit({local, ?MODULE}, in, 1).
+
+in_wait_global_1(_) ->
+	doc("Ensure that waiting in works with max=1 for a globally named queue."),
+	do_in_wait({global, ?MODULE}, in, 1),
+	do_in_wait_exit({global, ?MODULE}, in, 1).
+
+in_wait_via_1(_) ->
+	doc("Ensure that waiting in works with max=1 for a via-named queue."),
+	do_in_wait({via, global, ?MODULE}, in, 1),
+	do_in_wait_exit({via, global, ?MODULE}, in, 1).
+
+in_r_wait_anonymous_1(_) ->
+	doc("Ensure that waiting in_r works with max=1 for an anonymous queue."),
+	do_in_wait(undefined, in_r, 1),
+	do_in_wait_exit(undefined, in_r, 1).
+
+in_r_wait_local_1(_) ->
+	doc("Ensure that waiting in_r works with max=1 for a locally named queue."),
+	do_in_wait({local, ?MODULE}, in_r, 1),
+	do_in_wait_exit({local, ?MODULE}, in_r, 1).
+
+in_r_wait_global_1(_) ->
+	doc("Ensure that waiting in_r works with max=1 for a globally named queue."),
+	do_in_wait({global, ?MODULE}, in_r, 1),
+	do_in_wait_exit({global, ?MODULE}, in_r, 1).
+
+in_r_wait_via_1(_) ->
+	doc("Ensure that waiting in_r works with max=1 for a via-named queue."),
+	do_in_wait({via, global, ?MODULE}, in_r, 1),
+	do_in_wait_exit({via, global, ?MODULE}, in_r, 1).
+
+do_in_wait(ServerName, Op, Max) ->
+	{_Pid, Name}=do_start_shq(ServerName, start_link, #{max => Max}),
+	_=[ok=shq:Op(Name, N) || N <- lists:seq(1, Max)],
+	timer:apply_after(1000, shq, out, [Name]),
+	full=shq:Op(Name, test),
+	full=shq:Op(Name, test, 100),
+	ok=shq:Op(Name, test, 2000),
+	ok=shq:stop(Name),
 	ok.
 
-do_in_wait_exit(Op, Max) ->
-	{ok, Pid}=shq:start_link(#{max => Max}),
-	_=[ok=shq:Op(Pid, N) || N <- lists:seq(1, Max)],
-	{CPid, CMon}=spawn_monitor(fun () -> shq:Op(Pid, test, 1000) end),
+do_in_wait_exit(ServerName, Op, Max) ->
+	{_Pid, Name}=do_start_shq(ServerName, start_link, #{max => Max}),
+	_=[ok=shq:Op(Name, N) || N <- lists:seq(1, Max)],
+	{CPid, CMon}=spawn_monitor(fun () -> shq:Op(Name, test, 1000) end),
 	timer:sleep(100),
 	exit(CPid, kill),
 	receive {'DOWN', CMon, process, CPid, killed} -> ok end,
 	timer:sleep(1000),
 	true=lists:all(
-		fun (_) -> {ok, I}=shq:out(Pid), I=/=test end,
-		lists:seq(1, shq:size(Pid))
+		fun (_) -> {ok, I}=shq:out(Name), I=/=test end,
+		lists:seq(1, shq:size(Name))
 	),
-	ok=shq:stop(Pid),
+	ok=shq:stop(Name),
 	ok.
 
 order_wait_0(_) ->
 	doc("Ensure that waiting in are inserted and retrieved in correct order "
-	    "with max=0"),
+	    "with max=0."),
 	do_order_wait(in, out, 0).
 
 order_wait_r_0(_) ->
 	doc("Ensure that waiting in_r are inserted and retrieved in correct order "
-	    "with max=0"),
+	    "with max=0."),
 	do_order_wait(in_r, out_r, 0).
 
 order_wait_1(_) ->
 	doc("Ensure that waiting in are inserted and retrieved in correct order "
-	    "with max=1"),
+	    "with max=1."),
 	do_order_wait(in, out, 1).
 
 order_wait_r_1(_) ->
 	doc("Ensure that waiting in_r are inserted and retrieved in correct order "
-	    "with max=1"),
+	    "with max=1."),
 	do_order_wait(in_r, out_r, 1).
 
 do_order_wait(InOp, OutOp, Max) ->
@@ -168,7 +437,7 @@ do_order_wait(InOp, OutOp, Max) ->
 	ok.
 
 open_close(_) ->
-	doc(""),
+	doc("Ensure that items cannot be inserted when a queue is closed."),
 	{ok, Pid}=shq:start_link(#{max=>2}),
 	open=shq:status(Pid),
 	ok=shq:in(Pid, a),
