@@ -1,4 +1,4 @@
-name: shq CI
+name: CI
 
 on:
   push:
@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
 
     container:
-      image: erlang:24.1
+      image: erlang:24.2
 
     steps:
     - uses: actions/checkout@v2

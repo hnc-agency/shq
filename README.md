@@ -1,5 +1,8 @@
 # shq - Shared inter-process queues
 
+ ![Tests](https://github.com/hnc-agency/shq/actions/workflows/ci.yml/badge.svg)
+ :link: [Hex package](//hex.pm/packages/shq)
+
 `shq` requires OTP 24 or later.
 
 ## Usage
@@ -20,11 +23,17 @@
 {ok, {Pid, Mon}} = shq:start_monitor(ServerName, Opts).
 ```
 
-`ServerName` is a server name as used when starting a named `gen_server`.
-
-`Opts` is a map or property list of options.
-Currently, the only accepted option is `max`, which is the maximum number of items the queue can hold.
-Allowed values are either a non-negative integer or the atom `infinity` (default: `infinity`).
+<dl>
+  <dt><code>ServerName</code></dt>
+  <dd>A server name as used when starting a named <code>gen_server</code>.</dd>
+  <dt><code>Opts</code></dt>
+  <dd>A map or property list of options
+    <dl>
+      <dt><code>max => non_neg_integer() | infinity</code></dt>
+      <dd>The maximum number of items the queue can hold (default: <code>infinity</code>).</dd>
+    </dl>
+  </dd>
+</dl>
 
 ### Inserting an item
 
@@ -38,11 +47,14 @@ shq:in_r(ServerRef, Item).
 shq:in_r(ServerRef, Item, Timeout).
 ```
 
-`ServerRef` is a server reference as used with `gen_server`.
-
-`Item` is the item to insert.
-
-`Timeout` is a timeout to wait for a slot to become available if the queue is full (default: `0`).
+<dl>
+  <dt><code>ServerRef</code></dt>
+  <dd>A server reference as used with <code>gen_server</code>.</dd>
+  <dt><code>Item</code></dt>
+  <dd>The item to insert.</dd>
+  <dt><code>Timeout</code></dt>
+  <dd>A timeout to wait for a slot to become available if the queue is full (default: <code>0</code>).</dd>
+</dl>
 
 The return value is either the atom `ok` if the item was queued, the atom `full` if the queue was
 full, or the atom `closed` if the queue was not accepting new items at the time of the call.
@@ -62,9 +74,12 @@ shq:out_r(ServerRef).
 shq:out_r(ServerRef, Timeout).
 ```
 
-For `ServerRef`, see "Inserting".
-
-`Timeout` is a timeout to wait for an item to become available if the queue is empty (default: `0`).
+<dl>
+  <dt><code>ServerRef</code></dt>
+  <dd>See "Inserting".</dd>
+  <dt><code>Timeout</code></dt>
+  <dd>A timeout to wait for an item to become available if the queue is empty (default: <code>0</code>).</dd>
+</dl>
 
 The return value is either a tuple `{ok, Item}`, or the atom `empty`.
 
@@ -81,7 +96,13 @@ shq:peek(ServerRef).
 shq:peek_r(ServerRef).
 ```
 
+<dl>
+  <dt><code>ServerRef</code></dt>
+  <dd>See "Inserting".</dd>
+</dl>
+
 Peeking is the same as retrieving, but without removing the item from the queue.
+
 The operation will always return instantly, ie there is no way to wait for an item to become available
 if the queue is empty.
 
@@ -95,7 +116,10 @@ shq:drain(ServerRef).
 shq:drain_r(ServerRef).
 ```
 
-For `ServerRef`, see "Inserting".
+<dl>
+  <dt><code>ServerRef</code></dt>
+  <dd>See "Inserting".</dd>
+</dl>
 
 The return value is a list of all items that were in the queue at the time when the call was made,
 including the ones that were waiting for insertion.
@@ -105,6 +129,11 @@ including the ones that were waiting for insertion.
 ```erlang
 shq:size(ServerRef).
 ```
+
+<dl>
+  <dt><code>ServerRef</code></dt>
+  <dd>See "Inserting".</dd>
+</dl>
 
 Retrieves the number of items in the queue.
 
@@ -120,7 +149,10 @@ ok=shq:close(ServerRef).
 ok=shq:open(ServerRef).
 ```
 
-For `ServerRef`, see "Inserting".
+<dl>
+  <dt><code>ServerRef</code></dt>
+  <dd>See "Inserting".</dd>
+</dl>
 
 When a queue is closed, all subsequent insert operations will be rejected and return `closed`
 until it is reopened.
@@ -133,14 +165,21 @@ The queue status can be queried via `shq:status(ServerRef)`.
 ok=shq:stop(ServerRef).
 ```
 
+<dl>
+  <dt><code>ServerRef</code></dt>
+  <dd>See "Inserting".</dd>
+</dl>
+
 All items left will be lost when a queue is stopped.
 
 
 ## Notes
 
-As `shq` queues are backed by `ets` tables of type `set`, the number of items in a queue does not affect its performance.
-
-Queue performance may be affected by how you use them, however.
+As `shq` queues are backed by `ets` tables of type `set`, the number of items in a queue does
+not affect its performance. However, as `ets` tables live in memory, `shq` queues are not
+suitable for storing vast numbers of large items. It is also noteworthy that items waiting to
+be inserted into a queue that is currently full will still be stored in the backing table,
+albeit temporarily, and thus still against available memory.
 
 
 ## Authors
