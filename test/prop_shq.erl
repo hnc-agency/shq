@@ -1,5 +1,5 @@
-%% Copyright (c) 2022, Maria Scott <maria-12648430@hnc-agency.org>
-%% Copyright (c) 2022, Jan Uhlig <juhlig@hnc-agency.org>
+%% Copyright (c) 2022-2024, Maria Scott <maria-12648430@hnc-agency.org>
+%% Copyright (c) 2022-2024, Jan Uhlig <juhlig@hnc-agency.org>
 %%
 %% Permission to use, copy, modify, and/or distribute this software for any
 %% purpose with or without fee is hereby granted, provided that the above

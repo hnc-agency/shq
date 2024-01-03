@@ -3,7 +3,7 @@
 @author Maria Scott <maria-12648430@hnc-agency.org>
 @author Jan Uhlig <juhlig@hnc-agency.org>
 
-@copyright 2022 Maria Scott, Jan Uhlig
+@copyright 2022-2024 Maria Scott, Jan Uhlig
 
 @doc The `shq' library provides a module for inter-process queues.
 

@@ -3,7 +3,7 @@
 	'shq',
 	[
 		{description, "Shared inter-process queues"},
-		{vsn, "0.1.0"},
+		{vsn, "0.1.1"},
 		{modules, ['shq']},
 		{applications, [kernel, stdlib]},
 		{licenses, [<<"ISC">>]},
