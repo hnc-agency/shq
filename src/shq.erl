@@ -377,7 +377,7 @@ verify_opts(Opts) ->
 -spec init(Opts :: opts()) -> {'ok', #state{}}.
 init(Opts) ->
 	Max=maps:get(max, Opts, infinity),
-	Tab=ets:new(?MODULE, [protected, set]),
+	Tab=ets:new(?MODULE, [private, set]),
 	{ok, #state{tab=Tab, max=Max}}.
 
 %% @private
